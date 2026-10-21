@@ -13,6 +13,7 @@ export function sectionOf(route: Route, hasTrip: boolean): Section {
     case 'expenseEdit':
       return 'expenses'
     case 'travellers':
+    case 'person':
       return 'split'
     case 'report':
     case 'tripEdit':

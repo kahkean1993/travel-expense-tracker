@@ -63,6 +63,10 @@ Published URL pattern:
 
 The workflow derives `BASE_PATH` from the repository name automatically, so scripts, styles, the manifest, icons and the service worker all resolve under that subpath. Routes use hash URLs (`#/trips/…`), so refreshing any screen works without server rewrites.
 
+## Settling up
+
+The Home screen leads with **Settle up**: the fewest transfers that settle everyone. Tap **Mark paid** on a transfer (the full amount or part of it) and balances update; **Undo** removes a payment. Tap a person to see a line-by-line statement of why they owe or get back money. When everyone is settled you can mark the trip completed, which locks its expenses (reopen to change them). **Share summary** copies or shares a plain-text summary for your group chat. Home also shows spending pace against the budget and how much is safe to spend today. The add-expense form remembers the last currency, payment method, payer and split for the trip.
+
 ## Shared trips
 
 Shared trips let several people record expenses for the same trip from their own phones. They are optional: without the settings below the app runs in local-only mode, exactly like version 1.
@@ -101,9 +105,10 @@ The security rules live in the database (Row Level Security in `supabase/migrati
 You need a free [Supabase](https://supabase.com) account. The dashboard changes from time to time, so menu names may differ slightly from these steps.
 
 1. **Create a project.** In Supabase, create a new project and choose a region near you (for Malaysia, Singapore). Save the database password somewhere safe; the app doesn't need it.
-2. **Create the tables.** Open **SQL Editor** and run these two files, in this order, each pasted whole and run once. If you ran the first one earlier, run only the second.
+2. **Create the tables.** Open **SQL Editor** and run these three files, in this order, each pasted whole and run once. If you ran some earlier, run only the ones you haven't.
    1. [`supabase/migrations/20261021000000_shared_trips.sql`](supabase/migrations/20261021000000_shared_trips.sql): tables, security rules, realtime updates.
    2. [`supabase/migrations/20261022000000_join_by_name.sql`](supabase/migrations/20261022000000_join_by_name.sql): lets friends join with just a name.
+   3. [`supabase/migrations/20261023000000_settlements.sql`](supabase/migrations/20261023000000_settlements.sql): recorded settlement payments, "added by" tracking, and locking of completed trips.
 
    Supabase's security advisor may flag the `SECURITY DEFINER` functions; they are intentional (they let invites add members) and each one checks the caller.
 3. **Allow the app's address for sign-in links.** Under **Authentication → URL Configuration**:
@@ -189,12 +194,13 @@ The schema lives in `src/db/schema.ts` (`DB_SCHEMA_VERSION = 2`; version 2 added
 
 ## Testing
 
-`npm test` runs 113 tests covering:
+`npm test` runs 151 tests covering:
 
 - money: precision, parsing and validation, conversion direction, half-up rounding, tiny amounts, mixed currencies, formatting
 - splitting: equal and weighted remainders, custom amount validation, personal expenses, the payer's own share, balances summing to zero, and randomised settlement checks
 - data layer (IndexedDB via `fake-indexeddb`): persistence after reopening, totals after add/edit/delete, cascade delete that leaves other trips alone, traveller protection, base currency lock, categories, traveller order
 - backup: round-trip, merge never overwrites, invalid/newer/corrupted files rejected with data left untouched
+- settling up: payments change balances and suggestions, partial payments and undo, per-person statements that match the balances, spending pace and safe-to-spend, remembered entry defaults, completed trips locking expenses, payments syncing between devices and in backups (older backups still restore)
 - CSV escaping, formula guard and content
 - expense form validation, and the router
 - database schema and security rules (`supabase/tests`, run in PGlite, an in-process Postgres with a minimal stand-in for Supabase's `auth` schema): non-members and signed-out users see nothing, members can read and write, ownership can't be taken over, only the owner can delete, joining by picking a name or typing a new one (signed-out previews included), the owner's name can't be taken, people without an email can't create trips, invites can be revoked, share totals are enforced

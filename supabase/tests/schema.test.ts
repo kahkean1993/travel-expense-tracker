@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { PGlite } from '@electric-sql/pglite'
 import { beforeAll, describe, expect, it } from 'vitest'
 
-const migration = ['20261021000000_shared_trips.sql', '20261022000000_join_by_name.sql']
+const migration = ['20261021000000_shared_trips.sql', '20261022000000_join_by_name.sql', '20261023000000_settlements.sql']
   .map((file) => readFileSync(fileURLToPath(new URL(`../migrations/${file}`, import.meta.url)), 'utf8'))
   .join('\n')
 
@@ -275,5 +275,87 @@ describe('joining by name (no email)', () => {
     expect(await as(GUESTS[2]!, `update public.trip_invites set revoked_at = now() where trip_id = '${TRIP2}' returning token`)).toHaveLength(1)
     await expect(accept(GUESTS[3]!, null, 'Late')).rejects.toThrow(/invalid, expired/)
     expect(await as(null, `select * from public.invite_preview($1)`, [token])).toEqual([])
+  })
+})
+
+describe('settlements, added-by and completed trips', () => {
+  const TRIP4 = '10000000-0000-4000-8000-000000000004'
+  const T_OWNER = '20000000-0000-4000-8000-0000000000b1'
+  const T_GUEST = '20000000-0000-4000-8000-0000000000b2'
+  const MEMBER = GUESTS[4]!
+  const day = '2026-04-05'
+
+  const expenseFor = (id: string, createdBy = 'null') => `
+    insert into public.expenses (id, trip_id, description, date, original_amount_minor, original_currency,
+      exchange_rate, base_amount_minor, base_currency, category_id, category_name, payment_method,
+      payer_traveller_id, split_mode, shares, created_by)
+    values ('${id}', '${TRIP4}', 'Lunch', '${day}', 1000, 'MYR', '1', 1000, 'MYR', 'cat-food', 'Food & Drinks',
+      'cash', '${T_OWNER}', 'personal', '[{"travellerId":"${T_OWNER}","amount":1000}]', ${createdBy === 'null' ? 'null' : `'${createdBy}'`})
+    returning created_by, updated_by`
+  const settlementFor = (id: string, from: string, to: string, amount = 500, createdBy = 'null') => `
+    insert into public.settlements (id, trip_id, from_traveller_id, to_traveller_id, amount_minor, paid_on, created_by)
+    values ('${id}', '${TRIP4}', '${from}', '${to}', ${amount}, '${day}', ${createdBy === 'null' ? 'null' : `'${createdBy}'`})
+    returning created_by, updated_by`
+
+  it('lets members record a payment and undo it', async () => {
+    await as(OWNER, `insert into public.trips (id, name, start_date, end_date, base_currency)
+      values ('${TRIP4}', 'Penang', '2026-04-01', '2026-04-07', 'MYR')`)
+    await as(OWNER, `insert into public.travellers (id, trip_id, display_name, user_id) values
+      ('${T_OWNER}', '${TRIP4}', 'Kean', '${OWNER}'), ('${T_GUEST}', '${TRIP4}', 'Sam', null)`)
+    const [invite] = await as<{ token: string }>(OWNER, `insert into public.trip_invites (trip_id) values ('${TRIP4}') returning token`)
+    await as(MEMBER, `select public.accept_invite($1, $2, null)`, [invite!.token, T_GUEST])
+
+    await as(MEMBER, settlementFor('40000000-0000-4000-8000-000000000001', T_GUEST, T_OWNER))
+    expect(await as(OWNER, `select count(*)::int as n from public.settlements where deleted_at is null`)).toEqual([{ n: 1 }])
+    // Anyone on the trip can undo it (soft delete), and everyone sees that.
+    await as(OWNER, `update public.settlements set deleted_at = now() where id = '40000000-0000-4000-8000-000000000001'`)
+    const [row] = await as<{ deleted_at: string | null }>(MEMBER, `select deleted_at from public.settlements`)
+    expect(row!.deleted_at).not.toBeNull()
+    await expect(as(OWNER, `delete from public.settlements`)).rejects.toThrow(/permission denied/)
+  })
+
+  it('rejects invalid payments and outsiders', async () => {
+    const id = () => crypto.randomUUID()
+    await expect(as(OWNER, settlementFor(id(), T_GUEST, T_OWNER, 0))).rejects.toThrow(/check constraint/)
+    await expect(as(OWNER, settlementFor(id(), T_OWNER, T_OWNER))).rejects.toThrow(/cannot pay themselves/)
+    await expect(as(OWNER, settlementFor(id(), T_GUEST, ME_T))).rejects.toThrow(/Both people must be on this trip/)
+    await expect(as(STRANGER, settlementFor(id(), T_GUEST, T_OWNER))).rejects.toThrow(/row-level security/)
+    expect(await as(STRANGER, `select * from public.settlements`)).toEqual([])
+    await expect(as(null, `select * from public.settlements`)).rejects.toThrow(/permission denied/)
+  })
+
+  it('records who added a row and ignores attempts to fake it', async () => {
+    // The member tries to claim the owner added the rows.
+    const [e] = await as<{ created_by: string; updated_by: string }>(MEMBER, expenseFor('50000000-0000-4000-8000-000000000001', OWNER))
+    expect(e).toEqual({ created_by: MEMBER, updated_by: MEMBER })
+    const [s] = await as<{ created_by: string }>(MEMBER, settlementFor('40000000-0000-4000-8000-000000000002', T_GUEST, T_OWNER, 100, OWNER))
+    expect(s!.created_by).toBe(MEMBER)
+
+    // The owner edits it later: last writer changes, creator does not, even if they try.
+    const [after] = await as<{ created_by: string; updated_by: string }>(
+      OWNER,
+      `update public.expenses set description = 'Late lunch', created_by = '${OWNER}'
+       where id = '50000000-0000-4000-8000-000000000001' returning created_by, updated_by`,
+    )
+    expect(after).toEqual({ created_by: MEMBER, updated_by: OWNER })
+  })
+
+  it('locks expenses while the trip is completed, but not payments', async () => {
+    await as(OWNER, `update public.trips set status = 'completed' where id = '${TRIP4}'`)
+    await expect(as(OWNER, expenseFor(crypto.randomUUID()))).rejects.toThrow(/trip is completed/)
+    await expect(
+      as(MEMBER, `update public.expenses set description = 'x' where id = '50000000-0000-4000-8000-000000000001'`),
+    ).rejects.toThrow(/trip is completed/)
+    await expect(
+      as(MEMBER, `update public.expenses set deleted_at = now() where id = '50000000-0000-4000-8000-000000000001'`),
+    ).rejects.toThrow(/trip is completed/)
+
+    // Settling up and renaming people still work.
+    await as(MEMBER, settlementFor(crypto.randomUUID(), T_GUEST, T_OWNER, 200))
+    await as(OWNER, `update public.travellers set display_name = 'Sam T' where id = '${T_GUEST}'`)
+
+    // Reopening unlocks expenses again.
+    await as(OWNER, `update public.trips set status = 'active' where id = '${TRIP4}'`)
+    await as(MEMBER, `update public.expenses set description = 'Fine now' where id = '50000000-0000-4000-8000-000000000001'`)
   })
 })

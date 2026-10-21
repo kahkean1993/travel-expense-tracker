@@ -1,6 +1,6 @@
 /** Converts between local (Dexie) records and server rows. */
-import { PAYMENT_METHODS, SPLIT_MODES, type Expense, type ExpenseShare, type Traveller, type Trip } from '../types/domain'
-import type { RemoteExpenseRow, RemoteTravellerRow, RemoteTripRow } from './remote'
+import { PAYMENT_METHODS, SPLIT_MODES, type Expense, type ExpenseShare, type Settlement, type Traveller, type Trip } from '../types/domain'
+import type { RemoteExpenseRow, RemoteSettlementRow, RemoteTravellerRow, RemoteTripRow } from './remote'
 
 export function tripToRemote(t: Trip, ownerId: string): RemoteTripRow {
   return {
@@ -110,6 +110,8 @@ export function expenseFromRemote(r: RemoteExpenseRow): { expense: Expense; shar
       payerNameSnapshot: r.payer_name_snapshot,
       notes: r.notes,
       splitMode,
+      createdBy: r.created_by ?? undefined,
+      updatedBy: r.updated_by ?? undefined,
       createdAt: r.created_at,
       updatedAt: r.updated_at ?? r.created_at,
     },
@@ -122,5 +124,33 @@ export function expenseFromRemote(r: RemoteExpenseRow): { expense: Expense; shar
       allocatedBaseAmountMinorUnits: Number(s.amount),
       ...(s.weight ? { weight: s.weight } : {}),
     })),
+  }
+}
+
+export function settlementToRemote(s: Settlement): RemoteSettlementRow {
+  return {
+    id: s.id,
+    trip_id: s.tripId,
+    from_traveller_id: s.fromTravellerId,
+    to_traveller_id: s.toTravellerId,
+    amount_minor: s.amountMinorUnits,
+    paid_on: s.paidOn,
+    note: s.note,
+    created_at: s.createdAt,
+  }
+}
+
+export function settlementFromRemote(r: RemoteSettlementRow): Settlement {
+  return {
+    id: r.id,
+    tripId: r.trip_id,
+    fromTravellerId: r.from_traveller_id,
+    toTravellerId: r.to_traveller_id,
+    amountMinorUnits: Number(r.amount_minor),
+    paidOn: r.paid_on,
+    note: r.note,
+    createdBy: r.created_by ?? undefined,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at ?? r.created_at,
   }
 }

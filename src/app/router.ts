@@ -14,6 +14,7 @@ export type Route =
   | { name: 'expenseView'; tripId: string; expenseId: string }
   | { name: 'expenseEdit'; tripId: string; expenseId: string }
   | { name: 'travellers'; tripId: string }
+  | { name: 'person'; tripId: string; travellerId: string }
   | { name: 'report'; tripId: string }
   | { name: 'settings' }
   | { name: 'join'; token: string }
@@ -34,6 +35,7 @@ export function parseRoute(hash: string): Route {
   if (parts.length === 2) return { name: 'dashboard', tripId: b }
   if (c === 'edit' && parts.length === 3) return { name: 'tripEdit', tripId: b }
   if (c === 'travellers' && parts.length === 3) return { name: 'travellers', tripId: b }
+  if (c === 'person' && d && parts.length === 4) return { name: 'person', tripId: b, travellerId: d }
   if (c === 'report' && parts.length === 3) return { name: 'report', tripId: b }
   if (c === 'expenses') {
     if (parts.length === 3) return { name: 'expenses', tripId: b }
@@ -58,6 +60,7 @@ export const paths = {
   expenseView: (id: string, expenseId: string) => `/trips/${id}/expenses/${expenseId}`,
   expenseEdit: (id: string, expenseId: string) => `/trips/${id}/expenses/${expenseId}/edit`,
   travellers: (id: string) => `/trips/${id}/travellers`,
+  person: (id: string, travellerId: string) => `/trips/${id}/person/${travellerId}`,
   report: (id: string) => `/trips/${id}/report`,
   settings: () => '/settings',
   join: (token: string) => `/join/${token}`,
@@ -70,6 +73,7 @@ export function routeKey(route: Route): string {
   const parts: string[] = [route.name]
   if ('tripId' in route) parts.push(route.tripId)
   if ('expenseId' in route) parts.push(route.expenseId)
+  if ('travellerId' in route) parts.push(route.travellerId)
   if ('duplicateOf' in route && route.duplicateOf) parts.push(route.duplicateOf)
   if ('token' in route) parts.push(route.token)
   return parts.join(':')

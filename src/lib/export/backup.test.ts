@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { db } from '../../db/schema'
-import { categoriesRepo } from '../../db/repositories'
+import { categoriesRepo, settlementsRepo } from '../../db/repositories'
 import { addExpense, makeTrip } from '../../test/fixtures'
 import { createBackup, importMerge, importReplace, parseBackup, previewImport } from './backup'
 
@@ -121,5 +121,42 @@ describe('backup and restore', () => {
     expect(parseBackup(JSON.stringify(orphan)).ok).toBe(false)
 
     expect(await snapshot()).toEqual(before)
+  })
+})
+
+describe('payments in backups', () => {
+  it('round-trips recorded payments', async () => {
+    const { trip, travellers } = await makeTrip(['Me', 'Alex'])
+    await addExpense(trip, travellers, { amount: '40' })
+    await settlementsRepo.add(trip.id, { fromTravellerId: travellers[1]!.id, toTravellerId: travellers[0]!.id, amountMinorUnits: 1500, paidOn: '2026-03-05' })
+    const before = (await createBackup()).data.settlements
+    expect(before).toHaveLength(1)
+    const parsed = parseBackup(JSON.stringify(await createBackup()))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect((await previewImport(parsed.backup)).totalPayments).toBe(1)
+    await importReplace(parsed.backup)
+    expect((await createBackup()).data.settlements).toEqual(before)
+  })
+
+  it('still restores version 1 backups, which have no payments', async () => {
+    const { trip, travellers } = await makeTrip(['Me', 'Alex'])
+    await addExpense(trip, travellers, { amount: '40' })
+    const file = JSON.parse(JSON.stringify(await createBackup()))
+    delete file.data.settlements
+    file.formatVersion = 1
+    const parsed = parseBackup(JSON.stringify(file))
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok) expect(parsed.backup.data.settlements).toEqual([])
+  })
+
+  it('rejects payments that point at unknown people or pay themselves', async () => {
+    const { trip, travellers } = await makeTrip(['Me', 'Alex'])
+    await settlementsRepo.add(trip.id, { fromTravellerId: travellers[1]!.id, toTravellerId: travellers[0]!.id, amountMinorUnits: 100, paidOn: '2026-03-05' })
+    const file = JSON.parse(JSON.stringify(await createBackup()))
+    file.data.settlements[0].toTravellerId = 'ghost'
+    expect(parseBackup(JSON.stringify(file)).ok).toBe(false)
+    file.data.settlements[0].toTravellerId = file.data.settlements[0].fromTravellerId
+    expect(parseBackup(JSON.stringify(file)).ok).toBe(false)
   })
 })

@@ -180,7 +180,7 @@ export class SupabaseRemote implements Remote {
   /** Calls `onChange` whenever shared rows visible to this user change. */
   subscribe(onChange: () => void): () => void {
     let channel = this.client.channel('trip-sync')
-    for (const table of ['trips', 'trip_members', 'travellers', 'expenses']) {
+    for (const table of ['trips', 'trip_members', 'travellers', 'expenses', 'settlements']) {
       channel = channel.on('postgres_changes', { event: '*', schema: 'public', table }, () => onChange())
     }
     channel.subscribe()

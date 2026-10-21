@@ -13,6 +13,9 @@ import { formatMoney } from '../../lib/money/money'
 import { EMPTY_FILTER, dailySeries, filterExpenses, recentExpenses, summariseTrip, totalsByCategory } from './stats'
 import { ExpenseRow } from '../expenses/ExpenseRow'
 import { clearJustSaved, peekJustSaved } from '../expenses/justSaved'
+import { PaceCard } from './PaceCard'
+import { SettleUpCard } from '../splitting/SettleUp'
+import { useMyTravellerId } from '../splitting/useMyTraveller'
 
 export function DashboardPage({ tripId }: { tripId: string }) {
   return <TripGuard tripId={tripId}>{(data) => <Dashboard data={data} />}</TripGuard>
@@ -24,6 +27,7 @@ function Dashboard({ data }: { data: TripData }) {
   const summary = summariseTrip(trip, expenses, today)
   const catName = new Map(categories.map((c) => [c.id, c.name]))
   const travellerName = new Map(travellers.map((t) => [t.id, t.displayName]))
+  const myTravellerId = useMyTravellerId(travellers)
   const [justSaved] = useState(peekJustSaved)
   // Forget the "just saved" highlight a moment after it has been shown.
   useEffect(() => {
@@ -54,6 +58,9 @@ function Dashboard({ data }: { data: TripData }) {
       </header>
 
       <BudgetHero data={data} summary={summary} />
+
+      {travellers.length > 1 ? <SettleUpCard data={data} myTravellerId={myTravellerId} /> : null}
+      <PaceCard data={data} today={today} />
 
       {expenses.length === 0 ? (
         <EmptyState

@@ -1,3 +1,4 @@
+import { TripLockedBanner } from './TripLockedBanner'
 import { useEffect, useState } from 'react'
 import { paths } from '../../app/router'
 import { TripGuard } from '../../components/TripGuard'
@@ -50,9 +51,11 @@ function ExpenseList({ data }: { data: TripData }) {
           art="expenses"
           title="No expenses yet"
           action={
-            <LinkButton to={paths.expenseNew(trip.id)} variant="primary">
-              <IconPlus width={18} height={18} /> Add expense
-            </LinkButton>
+            trip.status === 'completed' ? undefined : (
+              <LinkButton to={paths.expenseNew(trip.id)} variant="primary">
+                <IconPlus width={18} height={18} /> Add expense
+              </LinkButton>
+            )
           }
         >
           Log your first expense. Foreign currencies are converted to {trip.baseCurrency} with the rate you enter.
@@ -75,11 +78,18 @@ function ExpenseList({ data }: { data: TripData }) {
         title="Expenses"
         subtitle={trip.name}
         actions={
-          <LinkButton to={paths.expenseNew(trip.id)} variant="primary" className="hidden md:inline-flex">
-            <IconPlus width={18} height={18} /> Add expense
-          </LinkButton>
+          trip.status === 'completed' ? undefined : (
+            <LinkButton to={paths.expenseNew(trip.id)} variant="primary" className="hidden md:inline-flex">
+              <IconPlus width={18} height={18} /> Add expense
+            </LinkButton>
+          )
         }
       />
+      {trip.status === 'completed' ? (
+        <div className="mb-3">
+          <TripLockedBanner tripId={trip.id} />
+        </div>
+      ) : null}
 
       <div className="mb-3 flex gap-2">
         <div className="relative flex-1">

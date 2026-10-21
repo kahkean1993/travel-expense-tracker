@@ -1,13 +1,14 @@
 /** React hooks that re-render automatically when IndexedDB data changes. */
 import { useLiveQuery } from 'dexie-react-hooks'
-import { categoriesRepo, expensesRepo, settingsRepo, travellersRepo, tripsRepo } from './repositories'
-import type { Category, Expense, ExpenseShare, ID, Traveller, Trip } from '../types/domain'
+import { categoriesRepo, expensesRepo, settingsRepo, settlementsRepo, travellersRepo, tripsRepo } from './repositories'
+import type { Category, Expense, ExpenseShare, ID, Settlement, Traveller, Trip } from '../types/domain'
 
 export interface TripData {
   trip: Trip
   travellers: Traveller[]
   expenses: Expense[]
   shares: ExpenseShare[]
+  settlements: Settlement[]
   categories: Category[]
 }
 
@@ -16,13 +17,14 @@ export function useTripData(tripId: ID): TripData | null | undefined {
   return useLiveQuery(async () => {
     const trip = await tripsRepo.get(tripId)
     if (!trip) return null
-    const [travellers, expenses, shares, categories] = await Promise.all([
+    const [travellers, expenses, shares, settlements, categories] = await Promise.all([
       travellersRepo.listByTrip(tripId),
       expensesRepo.listByTrip(tripId),
       expensesRepo.sharesByTrip(tripId),
+      settlementsRepo.listByTrip(tripId),
       categoriesRepo.list(tripId),
     ])
-    return { trip, travellers, expenses, shares, categories }
+    return { trip, travellers, expenses, shares, settlements, categories }
   }, [tripId])
 }
 

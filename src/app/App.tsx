@@ -17,6 +17,7 @@ import { ExpensesPage } from '../features/expenses/ExpensesPage'
 import { ExpenseFormPage } from '../features/expenses/ExpenseFormPage'
 import { ExpenseDetailPage } from '../features/expenses/ExpenseDetailPage'
 import { TravellersPage } from '../features/splitting/TravellersPage'
+import { PersonStatementPage } from '../features/splitting/PersonStatementPage'
 import { ReportPage } from '../features/reports/ReportPage'
 import { SettingsPage } from '../features/settings/SettingsPage'
 import { EmptyState, LinkButton } from '../components/ui'
@@ -142,6 +143,8 @@ function Screen({ route }: { route: Route }) {
       return <ExpenseDetailPage tripId={route.tripId} expenseId={route.expenseId} />
     case 'travellers':
       return <TravellersPage tripId={route.tripId} />
+    case 'person':
+      return <PersonStatementPage tripId={route.tripId} travellerId={route.travellerId} />
     case 'report':
       return <ReportPage tripId={route.tripId} />
     case 'settings':

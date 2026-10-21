@@ -4,7 +4,7 @@
  * The app always reads and writes the local IndexedDB copy, so it works
  * offline. A sync run then:
  *   1. Push: uploads queued local changes (the outbox) in dependency order
- *      (trips → travellers → expenses, deletions last).
+ *      (trips → travellers → expenses → settlements, deletions last).
  *   2. Pull: for each trip the user belongs to, downloads rows the server
  *      changed since the last pull, and removes local copies of trips the
  *      user is no longer a member of.
@@ -20,6 +20,8 @@ import type { OutboxEntry, SyncTable } from '../types/domain'
 import {
   expenseFromRemote,
   expenseToRemote,
+  settlementFromRemote,
+  settlementToRemote,
   travellerFromRemote,
   travellerToRemote,
   tripFromRemote,
@@ -32,6 +34,7 @@ import {
   type JoinPick,
   type Remote,
   type RemoteExpenseRow,
+  type RemoteSettlementRow,
   type RemoteTravellerRow,
 } from './remote'
 
@@ -51,6 +54,8 @@ const PUSH_ORDER: { table: SyncTable; op: OutboxEntry['op'] }[] = [
   { table: 'trips', op: 'upsert' },
   { table: 'travellers', op: 'upsert' },
   { table: 'expenses', op: 'upsert' },
+  { table: 'settlements', op: 'upsert' },
+  { table: 'settlements', op: 'delete' },
   { table: 'expenses', op: 'delete' },
   { table: 'travellers', op: 'delete' },
   { table: 'trips', op: 'delete' },
@@ -186,6 +191,11 @@ export class SyncEngine {
       if (rows.length) await this.remote.upsert('travellers', rows)
       return batch
     }
+    if (table === 'settlements') {
+      const rows = (await this.db.settlements.bulkGet(ids)).filter((s) => !!s).map(settlementToRemote)
+      if (rows.length) await this.remote.upsert('settlements', rows)
+      return batch
+    }
     const expenses = (await this.db.expenses.bulkGet(ids)).filter((e) => !!e)
     const categories = new Map((await this.db.categories.toArray()).map((c) => [c.id, c.name]))
     const rows: RemoteExpenseRow[] = []
@@ -236,16 +246,17 @@ export class SyncEngine {
       await this.repos.tripsRepo.removeLocalCopy(tripId)
       return
     }
-    const [travellers, expenses, members] = await Promise.all([
+    const [travellers, expenses, settlements, members] = await Promise.all([
       this.remote.fetchChanged('travellers', tripId, since),
       this.remote.fetchChanged('expenses', tripId, since),
+      this.remote.fetchChanged('settlements', tripId, since),
       this.remote.fetchMembers(tripId),
     ])
 
     const db = this.db
     await db.transaction(
       'rw',
-      [db.trips, db.travellers, db.expenses, db.expenseShares, db.categories, db.members, db.syncCursors, db.outbox],
+      [db.trips, db.travellers, db.expenses, db.expenseShares, db.settlements, db.categories, db.members, db.syncCursors, db.outbox],
       async () => {
         const pending = new Set(
           (await db.outbox.where('tripId').equals(tripId).toArray()).map((e) => e.key),
@@ -280,12 +291,18 @@ export class SyncEngine {
           }
         }
 
+        for (const row of settlements as RemoteSettlementRow[]) {
+          if (pending.has(`settlements:${row.id}`)) continue
+          if (row.deleted_at) await db.settlements.delete(row.id)
+          else await db.settlements.put(settlementFromRemote(row))
+        }
+
         await db.members.where('tripId').equals(tripId).delete()
         await db.members.bulkPut(
           members.map((m) => ({ tripId, userId: m.user_id, role: m.role, email: m.email, joinedAt: m.joined_at })),
         )
 
-        const newest = [tripRow, ...travellers, ...expenses]
+        const newest = [tripRow, ...travellers, ...expenses, ...settlements]
           .map((r) => r.updated_at ?? '')
           .reduce((a, b) => (b > a ? b : a), cursor ?? '')
         await db.syncCursors.put({ tripId, pulledUntil: newest || null })
@@ -320,7 +337,7 @@ export class SyncEngine {
     // so the screen that appears next already has it.
     const invite = (await this.remote.getActiveInvite(tripId)) ?? (await this.remote.createInvite(tripId))
     const db = this.db
-    await db.transaction('rw', [db.trips, db.travellers, db.expenses, db.outbox], async () => {
+    await db.transaction('rw', [db.trips, db.travellers, db.expenses, db.settlements, db.outbox], async () => {
       const ts = new Date().toISOString()
       await db.trips.update(tripId, { syncMode: 'cloud', ownerId: userId })
       if (meTravellerId) await db.travellers.update(meTravellerId, { userId })
@@ -328,6 +345,7 @@ export class SyncEngine {
         db.outbox.bulkPut(ids.map((id) => ({ key: `${table}:${id}`, table, recordId: id, tripId, op: 'upsert' as const, queuedAt: ts })))
       await queueAll('travellers', await db.travellers.where('tripId').equals(tripId).primaryKeys())
       await queueAll('expenses', await db.expenses.where('tripId').equals(tripId).primaryKeys())
+      await queueAll('settlements', await db.settlements.where('tripId').equals(tripId).primaryKeys())
     })
     await this.sync()
     return invite

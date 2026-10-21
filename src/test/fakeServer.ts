@@ -14,6 +14,7 @@ import {
   type Remote,
   type RemoteExpenseRow,
   type RemoteMemberRow,
+  type RemoteSettlementRow,
   type RemoteTravellerRow,
   type RemoteTripRow,
 } from '../sync/remote'
@@ -30,6 +31,7 @@ export class FakeServer {
   anonymousUsers = new Set<string>()
   travellers = new Map<string, Stored<RemoteTravellerRow>>()
   expenses = new Map<string, Stored<RemoteExpenseRow>>()
+  settlements = new Map<string, Stored<RemoteSettlementRow>>()
 
   /** Strictly increasing server clock. */
   now() {
@@ -59,7 +61,8 @@ export class FakeRemote implements Remote {
   }
 
   private table<T extends ChildTable>(table: T) {
-    const map = table === 'travellers' ? this.server.travellers : this.server.expenses
+    const map =
+      table === 'travellers' ? this.server.travellers : table === 'settlements' ? this.server.settlements : this.server.expenses
     return map as unknown as Map<string, Stored<ChildRow<T>>>
   }
 
@@ -129,7 +132,21 @@ export class FakeRemote implements Remote {
       this.assertMember(row.trip_id)
       const existing = target.get(row.id)
       if (existing && existing.trip_id !== row.trip_id) throw new RemoteError('rejected', 'trip_id cannot change')
+      if (table === 'settlements') {
+        const s = row as RemoteSettlementRow
+        if (s.from_traveller_id === s.to_traveller_id) throw new RemoteError('rejected', 'Someone cannot pay themselves')
+        const onTrip = (id: string) => this.server.travellers.get(id)?.trip_id === s.trip_id
+        if (!onTrip(s.from_traveller_id) || !onTrip(s.to_traveller_id)) {
+          throw new RemoteError('rejected', 'Both people must be on this trip')
+        }
+        if (!Number.isInteger(s.amount_minor) || s.amount_minor < 1) {
+          throw new RemoteError('rejected', 'violates check constraint "settlements_amount_minor_check"')
+        }
+      }
       if (table === 'expenses') {
+        if (this.server.trips.get(row.trip_id)?.status === 'completed') {
+          throw new RemoteError('rejected', 'This trip is completed. Reopen it to change expenses')
+        }
         const e = row as RemoteExpenseRow
         const sum = e.shares.reduce((s, x) => s + x.amount, 0)
         if (sum !== e.base_amount_minor) throw new RemoteError('rejected', 'violates check constraint "expenses_shares_check"')
@@ -140,8 +157,11 @@ export class FakeRemote implements Remote {
     }
     for (const row of rows) {
       const existing = target.get(row.id)
+      const author = table === 'travellers' ? {} : { created_by: (existing as { created_by?: string | null } | undefined)?.created_by ?? this.userId }
       target.set(row.id, {
         ...clone(row),
+        ...author,
+        ...(table === 'expenses' ? { updated_by: this.userId } : {}),
         created_at: existing?.created_at ?? row.created_at,
         updated_at: this.server.now(),
         deleted_at: existing?.deleted_at ?? null,
@@ -152,7 +172,21 @@ export class FakeRemote implements Remote {
   async softDelete(table: 'trips' | ChildTable, ids: string[]) {
     const me = this.check()
     const target =
-      table === 'trips' ? this.server.trips : table === 'travellers' ? this.server.travellers : this.server.expenses
+      table === 'trips'
+        ? this.server.trips
+        : table === 'travellers'
+          ? this.server.travellers
+          : table === 'settlements'
+            ? this.server.settlements
+            : this.server.expenses
+    if (table === 'expenses') {
+      for (const id of ids) {
+        const tripId = this.server.expenses.get(id)?.trip_id
+        if (tripId && this.isMember(tripId) && this.server.trips.get(tripId)?.status === 'completed') {
+          throw new RemoteError('rejected', 'This trip is completed. Reopen it to change expenses')
+        }
+      }
+    }
     for (const id of ids) {
       const row = target.get(id) as Stored<{ trip_id?: string; owner_id?: string; id: string }> | undefined
       if (!row) continue

@@ -114,23 +114,34 @@ export function computeAllocation(input: SplitInput): Result<Allocation[]> {
 
 export interface BalanceRow {
   travellerId: ID
+  /** Total of the expenses this person paid for. */
   paid: number
+  /** This person's share of all expenses. */
   share: number
-  /** paid − share. Positive: should receive money. Negative: owes money. */
+  /** Settlement payments this person has made to others. */
+  sent: number
+  /** Settlement payments this person has received. */
+  received: number
+  /** paid − share + sent − received. Positive: should receive money. Negative: owes money. */
   net: number
 }
 
-/** Per-traveller totals from expenses (payer + amount) and their shares. */
+/**
+ * Per-traveller totals from expenses (payer + amount), their shares and any
+ * recorded settlement payments. Paying someone back moves both balances
+ * towards zero, and all balances always add up to zero.
+ */
 export function computeBalances(
   travellerIds: ID[],
   expenses: { payerTravellerId: ID; baseAmountMinorUnits: number }[],
   shares: { travellerId: ID; allocatedBaseAmountMinorUnits: number }[],
+  settlements: { fromTravellerId: ID; toTravellerId: ID; amountMinorUnits: number }[] = [],
 ): BalanceRow[] {
   const rows = new Map<ID, BalanceRow>()
   const row = (id: ID) => {
     let r = rows.get(id)
     if (!r) {
-      r = { travellerId: id, paid: 0, share: 0, net: 0 }
+      r = { travellerId: id, paid: 0, share: 0, sent: 0, received: 0, net: 0 }
       rows.set(id, r)
     }
     return r
@@ -138,7 +149,11 @@ export function computeBalances(
   travellerIds.forEach(row)
   for (const e of expenses) row(e.payerTravellerId).paid += e.baseAmountMinorUnits
   for (const s of shares) row(s.travellerId).share += s.allocatedBaseAmountMinorUnits
-  for (const r of rows.values()) r.net = r.paid - r.share
+  for (const p of settlements) {
+    row(p.fromTravellerId).sent += p.amountMinorUnits
+    row(p.toTravellerId).received += p.amountMinorUnits
+  }
+  for (const r of rows.values()) r.net = r.paid - r.share + r.sent - r.received
   return [...rows.values()]
 }
 

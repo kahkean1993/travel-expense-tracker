@@ -58,6 +58,23 @@ export interface RemoteExpenseRow {
   shares: RemoteShare[]
   created_at: string
   updated_at?: string
+  /** Set by the server: who added / last changed the row. */
+  created_by?: string | null
+  updated_by?: string | null
+  deleted_at?: string | null
+}
+
+export interface RemoteSettlementRow {
+  id: string
+  trip_id: string
+  from_traveller_id: string
+  to_traveller_id: string
+  amount_minor: number
+  paid_on: string
+  note: string
+  created_at: string
+  updated_at?: string
+  created_by?: string | null
   deleted_at?: string | null
 }
 
@@ -97,8 +114,12 @@ export interface Invite {
   expiresAt: string
 }
 
-export type ChildTable = 'travellers' | 'expenses'
-export type ChildRow<T extends ChildTable> = T extends 'travellers' ? RemoteTravellerRow : RemoteExpenseRow
+export type ChildTable = 'travellers' | 'expenses' | 'settlements'
+export type ChildRow<T extends ChildTable> = T extends 'travellers'
+  ? RemoteTravellerRow
+  : T extends 'settlements'
+    ? RemoteSettlementRow
+    : RemoteExpenseRow
 
 /**
  * - network: no connection or the server could not be reached; retry later.

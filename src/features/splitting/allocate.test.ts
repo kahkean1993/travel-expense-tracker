@@ -105,6 +105,64 @@ describe('computeAllocation', () => {
   })
 })
 
+describe('settlement payments', () => {
+  const people = ['a', 'b', 'c']
+  const dinner = [{ payerTravellerId: 'a', baseAmountMinorUnits: 9000 }]
+  const dinnerShares = allocateEqual(9000, people).map((x) => ({ travellerId: x.travellerId, allocatedBaseAmountMinorUnits: x.amount }))
+
+  it('moves both balances towards zero when someone pays back', () => {
+    const rows = computeBalances(people, dinner, dinnerShares, [{ fromTravellerId: 'b', toTravellerId: 'a', amountMinorUnits: 3000 }])
+    expect(rows.map((r) => [r.travellerId, r.sent, r.received, r.net])).toEqual([
+      ['a', 0, 3000, 3000],
+      ['b', 3000, 0, 0],
+      ['c', 0, 0, -3000],
+    ])
+    expect(suggestSettlements(rows)).toEqual([{ fromTravellerId: 'c', toTravellerId: 'a', amount: 3000 }])
+  })
+
+  it('leaves nothing to pay once everyone has paid in full', () => {
+    const rows = computeBalances(people, dinner, dinnerShares, [
+      { fromTravellerId: 'b', toTravellerId: 'a', amountMinorUnits: 3000 },
+      { fromTravellerId: 'c', toTravellerId: 'a', amountMinorUnits: 3000 },
+    ])
+    expect(rows.every((r) => r.net === 0)).toBe(true)
+    expect(suggestSettlements(rows)).toEqual([])
+  })
+
+  it('keeps balances at zero and settles exactly after partial payments', () => {
+    let seed = 7
+    const rand = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
+    for (let round = 0; round < 200; round++) {
+      const crew = ['p0', 'p1', 'p2', 'p3'].slice(0, 2 + Math.floor(rand() * 3))
+      const expenses = []
+      const shares = []
+      for (let i = 0; i < 1 + Math.floor(rand() * 8); i++) {
+        const total = 1 + Math.floor(rand() * 50000)
+        expenses.push({ payerTravellerId: crew[Math.floor(rand() * crew.length)]!, baseAmountMinorUnits: total })
+        for (const a of allocateEqual(total, crew)) shares.push({ travellerId: a.travellerId, allocatedBaseAmountMinorUnits: a.amount })
+      }
+      // Pay back a random part of each suggested transfer, then check again.
+      let payments: { fromTravellerId: string; toTravellerId: string; amountMinorUnits: number }[] = []
+      for (let step = 0; step < 4; step++) {
+        const rows = computeBalances(crew, expenses, shares, payments)
+        expect(rows.reduce((s, r) => s + r.net, 0)).toBe(0)
+        const transfers = suggestSettlements(rows)
+        if (transfers.length === 0) break
+        const t = transfers[Math.floor(rand() * transfers.length)]!
+        const part = 1 + Math.floor(rand() * t.amount)
+        payments = [...payments, { fromTravellerId: t.fromTravellerId, toTravellerId: t.toTravellerId, amountMinorUnits: part }]
+      }
+      const finalRows = computeBalances(crew, expenses, shares, payments)
+      const after = new Map(finalRows.map((r) => [r.travellerId, r.net]))
+      for (const t of suggestSettlements(finalRows)) {
+        after.set(t.fromTravellerId, after.get(t.fromTravellerId)! + t.amount)
+        after.set(t.toTravellerId, after.get(t.toTravellerId)! - t.amount)
+      }
+      for (const v of after.values()) expect(v).toBe(0)
+    }
+  })
+})
+
 describe('balances and settlements', () => {
   const travellers = ['me', 'ali', 'bea']
 
@@ -119,9 +177,9 @@ describe('balances and settlements', () => {
       })),
     )
     expect(rows).toEqual([
-      { travellerId: 'me', paid: 9000, share: 3000, net: 6000 },
-      { travellerId: 'ali', paid: 0, share: 3000, net: -3000 },
-      { travellerId: 'bea', paid: 0, share: 3000, net: -3000 },
+      { travellerId: 'me', paid: 9000, share: 3000, sent: 0, received: 0, net: 6000 },
+      { travellerId: 'ali', paid: 0, share: 3000, sent: 0, received: 0, net: -3000 },
+      { travellerId: 'bea', paid: 0, share: 3000, sent: 0, received: 0, net: -3000 },
     ])
   })
 
@@ -162,17 +220,17 @@ describe('balances and settlements', () => {
 
   it('suggests no transfers when everyone is settled', () => {
     const rows: BalanceRow[] = [
-      { travellerId: 'a', paid: 100, share: 100, net: 0 },
-      { travellerId: 'b', paid: 0, share: 0, net: 0 },
+      { travellerId: 'a', paid: 100, share: 100, sent: 0, received: 0, net: 0 },
+      { travellerId: 'b', paid: 0, share: 0, sent: 0, received: 0, net: 0 },
     ]
     expect(suggestSettlements(rows)).toEqual([])
   })
 
   it('minimises transfers for a simple case', () => {
     const rows: BalanceRow[] = [
-      { travellerId: 'a', paid: 0, share: 0, net: 6000 },
-      { travellerId: 'b', paid: 0, share: 0, net: -3000 },
-      { travellerId: 'c', paid: 0, share: 0, net: -3000 },
+      { travellerId: 'a', paid: 0, share: 0, sent: 0, received: 0, net: 6000 },
+      { travellerId: 'b', paid: 0, share: 0, sent: 0, received: 0, net: -3000 },
+      { travellerId: 'c', paid: 0, share: 0, sent: 0, received: 0, net: -3000 },
     ]
     expect(suggestSettlements(rows)).toEqual([
       { fromTravellerId: 'b', toTravellerId: 'a', amount: 3000 },

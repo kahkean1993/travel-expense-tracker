@@ -13,6 +13,8 @@ import type {
   Expense,
   ExpenseShare,
   ID,
+  ISODate,
+  Settlement,
   SyncTable,
   Traveller,
   Trip,
@@ -31,6 +33,9 @@ export type ShareRecord = Omit<ExpenseShare, 'id' | 'expenseId' | 'tripId'>
 
 export const isCloudTrip = (trip: Trip | undefined) => trip?.syncMode === 'cloud'
 
+export const TRIP_LOCKED = 'This trip is completed. Reopen it to change expenses.'
+export type SettlementInput = Pick<Settlement, 'fromTravellerId' | 'toTravellerId' | 'amountMinorUnits' | 'paidOn'> & { note?: string }
+
 export function createRepositories(db: TravelDb) {
   /** Records that data changed, for the backup reminder. Call inside a write transaction. */
   async function bumpChangeCount(by = 1) {
@@ -48,6 +53,7 @@ export function createRepositories(db: TravelDb) {
   async function deleteTripRows(id: ID, opts: { keepOutboxKey?: string } = {}) {
     await db.expenseShares.where('tripId').equals(id).delete()
     await db.expenses.where('tripId').equals(id).delete()
+    await db.settlements.where('tripId').equals(id).delete()
     await db.travellers.where('tripId').equals(id).delete()
     await db.categories.where('tripId').equals(id).delete()
     await db.members.where('tripId').equals(id).delete()
@@ -65,6 +71,7 @@ export function createRepositories(db: TravelDb) {
     db.travellers,
     db.expenses,
     db.expenseShares,
+    db.settlements,
     db.categories,
     db.members,
     db.syncCursors,
@@ -235,23 +242,24 @@ export function createRepositories(db: TravelDb) {
       )
     },
 
-    /** Number of expenses where this traveller paid or has a share. */
+    /** Number of expenses and settlement payments this traveller is part of. */
     async usageCount(id: ID): Promise<number> {
-      const [paid, shares] = await Promise.all([
+      const [paid, shares, payments] = await Promise.all([
         db.expenses.where('payerTravellerId').equals(id).primaryKeys(),
         db.expenseShares.where('travellerId').equals(id).toArray(),
+        db.settlements.filter((s) => s.fromTravellerId === id || s.toTravellerId === id).count(),
       ])
-      return new Set([...paid, ...shares.map((s) => s.expenseId)]).size
+      return new Set([...paid, ...shares.map((s) => s.expenseId)]).size + payments
     },
 
     /** Removes a traveller. Refuses if any expense references them, to protect history. */
     remove(id: ID) {
       return trackSave(() =>
-        db.transaction('rw', [db.trips, db.travellers, db.expenses, db.expenseShares, db.outbox, db.settings], async () => {
+        db.transaction('rw', [db.trips, db.travellers, db.expenses, db.expenseShares, db.settlements, db.outbox, db.settings], async () => {
           const t = await db.travellers.get(id)
           if (!t) return
           if ((await travellersRepo.usageCount(id)) > 0) {
-            throw new Error('This person is part of saved expenses. Edit or delete those expenses first.')
+            throw new Error('This person is part of saved expenses or payments. Edit or delete those first.')
           }
           await db.travellers.delete(id)
           await queue(t.tripId, 'travellers', id, 'delete')
@@ -282,6 +290,7 @@ export function createRepositories(db: TravelDb) {
       return trackSave(() =>
         db.transaction('rw', [db.trips, db.expenses, db.expenseShares, db.outbox, db.settings], async () => {
           const ts = now()
+          if ((await db.trips.get(record.tripId))?.status === 'completed') throw new Error(TRIP_LOCKED)
           const existing = id ? await db.expenses.get(id) : undefined
           if (id && !existing) throw new Error('This expense no longer exists.')
           const expense: Expense = {
@@ -307,6 +316,7 @@ export function createRepositories(db: TravelDb) {
         db.transaction('rw', [db.trips, db.expenses, db.expenseShares, db.outbox, db.settings], async () => {
           const e = await db.expenses.get(id)
           if (!e) return
+          if ((await db.trips.get(e.tripId))?.status === 'completed') throw new Error(TRIP_LOCKED)
           await db.expenseShares.where('expenseId').equals(id).delete()
           await db.expenses.delete(id)
           await queue(e.tripId, 'expenses', id, 'delete')
@@ -372,6 +382,55 @@ export function createRepositories(db: TravelDb) {
     },
   }
 
+  // ---------- Settlement payments ----------
+
+  const settlementsRepo = {
+    listByTrip: (tripId: ID) => db.settlements.where('tripId').equals(tripId).toArray(),
+
+    /** Records that one traveller paid another. Allowed even after the trip is completed. */
+    add(tripId: ID, input: SettlementInput): Promise<Settlement> {
+      return trackSave(() =>
+        db.transaction('rw', [db.trips, db.travellers, db.settlements, db.outbox, db.settings], async () => {
+          if (!Number.isSafeInteger(input.amountMinorUnits) || input.amountMinorUnits <= 0) {
+            throw new Error('The amount must be greater than zero.')
+          }
+          if (input.fromTravellerId === input.toTravellerId) throw new Error('Someone cannot pay themselves.')
+          const [from, to] = await Promise.all([db.travellers.get(input.fromTravellerId), db.travellers.get(input.toTravellerId)])
+          if (!from || !to || from.tripId !== tripId || to.tripId !== tripId) throw new Error('Both people must be on this trip.')
+          const ts = now()
+          const payment: Settlement = {
+            id: newId(),
+            tripId,
+            fromTravellerId: input.fromTravellerId,
+            toTravellerId: input.toTravellerId,
+            amountMinorUnits: input.amountMinorUnits,
+            paidOn: input.paidOn as ISODate,
+            note: (input.note ?? '').trim().slice(0, 200),
+            createdAt: ts,
+            updatedAt: ts,
+          }
+          await db.settlements.add(payment)
+          await queue(tripId, 'settlements', payment.id, 'upsert')
+          await bumpChangeCount()
+          return payment
+        }),
+      )
+    },
+
+    /** Undoes a recorded payment. */
+    remove(id: ID) {
+      return trackSave(() =>
+        db.transaction('rw', [db.trips, db.settlements, db.outbox, db.settings], async () => {
+          const payment = await db.settlements.get(id)
+          if (!payment) return
+          await db.settlements.delete(id)
+          await queue(payment.tripId, 'settlements', id, 'delete')
+          await bumpChangeCount()
+        }),
+      )
+    },
+  }
+
   const outboxRepo = {
     count: () => db.outbox.count(),
     list: () => db.outbox.toArray(),
@@ -382,11 +441,11 @@ export function createRepositories(db: TravelDb) {
       }),
   }
 
-  return { settingsRepo, tripsRepo, travellersRepo, expensesRepo, categoriesRepo, outboxRepo }
+  return { settingsRepo, tripsRepo, travellersRepo, expensesRepo, categoriesRepo, settlementsRepo, outboxRepo }
 }
 
 export type Repositories = ReturnType<typeof createRepositories>
 
 /** Repositories for the app's own database. */
-export const { settingsRepo, tripsRepo, travellersRepo, expensesRepo, categoriesRepo, outboxRepo } =
+export const { settingsRepo, tripsRepo, travellersRepo, expensesRepo, categoriesRepo, settlementsRepo, outboxRepo } =
   createRepositories(defaultDb)

@@ -4,6 +4,7 @@ import { navigate, paths } from '../../app/router'
 import { TripGuard } from '../../components/TripGuard'
 import type { TripData } from '../../db/hooks'
 import { expensesRepo } from '../../db/repositories'
+import { TripLockedNotice } from './TripLockedNotice'
 import { Button, ChipGroup, EmptyState, Field, FieldError, LinkButton, Loading, Money, Notice, PageHeader, TextInput } from '../../components/ui'
 import { cardClass, inputClass } from '../../components/styles'
 import { Avatar, CategoryIcon } from '../../components/visuals'
@@ -14,7 +15,8 @@ import { useAuth } from '../../sync/cloud'
 import { currencySymbol, minorToInputString } from '../../lib/money/money'
 import { localDateString } from '../../lib/export/csv'
 import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS, type Expense, type ExpenseShare, type PaymentMethod } from '../../types/domain'
-import { emptyExpenseForm, evaluateExpenseForm, formFromExpense, type ExpenseFormValues } from './expenseDraft'
+import { evaluateExpenseForm, formFromExpense, type ExpenseFormValues } from './expenseDraft'
+import { initialValues, lastEntryFromForm, loadLastEntry, saveLastEntry } from './quickEntry'
 
 export function ExpenseFormPage({
   tripId,
@@ -83,13 +85,10 @@ function ExpenseForm({
       const v = formFromExpense(source, sourceShares, minorToInputString)
       return mode === 'duplicate' ? { ...v, date: today } : v
     }
-    const blank = emptyExpenseForm(trip, travellers, today)
-    if (!myTraveller) return blank
-    return {
-      ...blank,
-      payerId: myTraveller.id,
-      participantIds: blank.splitMode === 'personal' ? [myTraveller.id] : blank.participantIds,
-    }
+    return initialValues(trip, travellers, today, loadLastEntry(trip.id), {
+      myTravellerId: myTraveller?.id,
+      rateFor: (currency) => lastRateFor(expenses, currency),
+    })
   })
   const [submitted, setSubmitted] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -130,6 +129,10 @@ function ExpenseForm({
     })
   }
 
+  function selectEveryone() {
+    setValues((v) => ({ ...v, participantIds: travellers.map((t) => t.id) }))
+  }
+
   function toggleParticipant(id: string) {
     setValues((v) => {
       const has = v.participantIds.includes(id)
@@ -152,6 +155,7 @@ function ExpenseForm({
       try {
         const saved = await expensesRepo.save(mode === 'edit' ? source!.id : undefined, result.record, result.shares)
         markJustSaved(saved.id)
+        saveLastEntry(trip.id, lastEntryFromForm(values))
         if (addAnother) {
           setValues((v) => ({ ...v, amount: '', description: '', notes: '', customAmounts: {} }))
           setSubmitted(false)
@@ -177,6 +181,8 @@ function ExpenseForm({
   const splitChoice = values.splitMode === 'personal' ? 'personal' : values.splitMode === 'equal' ? 'equal' : 'custom'
   const title = mode === 'edit' ? 'Edit expense' : mode === 'duplicate' ? 'Duplicate expense' : 'Add expense'
   const cancelTo = mode === 'edit' && source ? paths.expenseView(trip.id, source.id) : paths.expenses(trip.id)
+
+  if (trip.status === 'completed') return <TripLockedNotice tripId={trip.id} back={cancelTo} />
 
   return (
     <div className="mx-auto max-w-xl">
@@ -386,7 +392,14 @@ function ExpenseForm({
                     />
                   ) : null}
                   <fieldset>
-                    <legend className="mb-2 text-sm font-medium text-slate-700">People sharing</legend>
+                    <legend className="mb-2 flex w-full items-center justify-between text-sm font-medium text-slate-700">
+                      People sharing
+                      {values.participantIds.length < travellers.length ? (
+                        <button type="button" onClick={selectEveryone} className="press min-h-9 rounded-lg px-2.5 text-sm font-medium text-accent-700 hover:bg-accent-50">
+                          Everyone
+                        </button>
+                      ) : null}
+                    </legend>
                     <ul className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200">
                       {travellers.map((t) => {
                         const checked = values.participantIds.includes(t.id)

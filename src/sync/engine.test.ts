@@ -16,7 +16,7 @@ function device(server: FakeServer, userId: string, options: { anonymous?: boole
   const db = new TravelDb(`device-${userId}-${Math.random()}`)
   opened.push(db)
   const engine = new SyncEngine(db, server.device(userId, options))
-  const { tripsRepo, travellersRepo, expensesRepo, categoriesRepo } = engine.repos
+  const { tripsRepo, travellersRepo, expensesRepo, categoriesRepo, settlementsRepo } = engine.repos
   return {
     db,
     engine,
@@ -24,6 +24,7 @@ function device(server: FakeServer, userId: string, options: { anonymous?: boole
     travellersRepo,
     expensesRepo,
     categoriesRepo,
+    settlementsRepo,
     async addExpense(tripId: string, over: Partial<ExpenseFormValues>) {
       const trip = (await tripsRepo.get(tripId))!
       const travellers = await travellersRepo.listByTrip(tripId)
@@ -373,5 +374,62 @@ describe('sync engine', () => {
     await a.engine.shareTrip(trip.id)
     expect(server.expenses.size).toBe(230)
     expect(await a.db.outbox.count()).toBe(0)
+  })
+})
+
+describe('settlement payments over sync', () => {
+  it('a payment recorded on one phone appears on the other, and undo removes it', async () => {
+    const { alice, bob, server, tripId, aliceT, bobT } = await sharedTrip()
+    const payment = await bob.settlementsRepo.add(tripId, {
+      fromTravellerId: bobT.id,
+      toTravellerId: aliceT.id,
+      amountMinorUnits: 1500,
+      paidOn: '2026-03-05',
+    })
+    await bob.engine.sync()
+    expect(server.settlements.get(payment.id)).toMatchObject({ amount_minor: 1500, created_by: 'bob' })
+    await alice.engine.sync()
+    expect(await alice.settlementsRepo.listByTrip(tripId)).toMatchObject([{ id: payment.id, createdBy: 'bob', amountMinorUnits: 1500 }])
+
+    await alice.settlementsRepo.remove(payment.id)
+    await alice.engine.sync()
+    await bob.engine.sync()
+    expect(await bob.settlementsRepo.listByTrip(tripId)).toEqual([])
+    expect(await bob.db.outbox.count()).toBe(0)
+  })
+
+  it('records who added an expense', async () => {
+    const { alice, bob, tripId, bobT } = await sharedTrip()
+    await bob.addExpense(tripId, { amount: '20', payerId: bobT.id, description: 'Snacks' })
+    await bob.engine.sync()
+    await alice.engine.sync()
+    const snacks = (await alice.expensesRepo.listByTrip(tripId)).find((e) => e.description === 'Snacks')
+    expect(snacks).toMatchObject({ createdBy: 'bob', updatedBy: 'bob' })
+  })
+
+  it('refuses expense changes while the trip is completed, but still takes payments', async () => {
+    const { alice, bob, tripId, aliceT, bobT } = await sharedTrip()
+    await alice.tripsRepo.setStatus(tripId, 'completed')
+    await alice.engine.sync()
+    await bob.engine.sync()
+    // Bob's phone is out of date about nothing: it also locks locally.
+    await expect(bob.addExpense(tripId, { amount: '5' })).rejects.toThrow(/completed/)
+    await bob.settlementsRepo.add(tripId, { fromTravellerId: bobT.id, toTravellerId: aliceT.id, amountMinorUnits: 100, paidOn: '2026-03-06' })
+    await bob.engine.sync()
+    expect(bob.engine.getStatus().phase).toBe('idle')
+  })
+
+  it('the server rejects an expense that was queued before the trip was completed', async () => {
+    const { alice, bob, server, tripId } = await sharedTrip()
+    // Bob adds an expense offline; meanwhile Alice completes the trip.
+    server.online = false
+    await bob.addExpense(tripId, { amount: '5', description: 'Late' })
+    server.online = true
+    await alice.tripsRepo.setStatus(tripId, 'completed')
+    await alice.engine.sync()
+    await bob.engine.push()
+    const failed = await bob.db.outbox.filter((e) => !!e.error).toArray()
+    expect(failed.map((f) => f.table)).toEqual(['expenses'])
+    expect(failed[0]!.error).toMatch(/completed/)
   })
 })

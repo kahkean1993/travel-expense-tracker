@@ -8,8 +8,10 @@ import { Avatar, CategoryIcon } from '../../components/visuals'
 import { useBusy } from '../../components/useBusy'
 import { formatDate } from '../../lib/dates'
 import { describeRate, formatMoney } from '../../lib/money/money'
-import { PAYMENT_METHOD_LABELS } from '../../types/domain'
+import { PAYMENT_METHOD_LABELS, type Traveller } from '../../types/domain'
 import { SPLIT_MODE_LABELS } from './labels'
+import { TripLockedBanner } from './TripLockedBanner'
+import { useWhoIs } from './useWhoIs'
 
 export function ExpenseDetailPage({ tripId, expenseId }: { tripId: string; expenseId: string }) {
   const [confirm, setConfirm] = useState(false)
@@ -67,17 +69,23 @@ export function ExpenseDetailPage({ tripId, expenseId }: { tripId: string; expen
               </dl>
             </Card>
 
-            <div className="flex flex-wrap gap-2">
-              <LinkButton to={paths.expenseEdit(trip.id, expense.id)} variant="primary">
-                <IconPencil width={17} height={17} /> Edit
-              </LinkButton>
-              <LinkButton to={paths.expenseDuplicate(trip.id, expense.id)}>
-                <IconPlus width={17} height={17} /> Duplicate
-              </LinkButton>
-              <Button variant="danger" onClick={() => setConfirm(true)}>
-                Delete
-              </Button>
-            </div>
+            <AddedBy tripId={trip.id} travellers={travellers} shared={trip.syncMode === 'cloud'} createdBy={expense.createdBy} updatedBy={expense.updatedBy} />
+
+            {trip.status === 'completed' ? (
+              <TripLockedBanner tripId={trip.id} />
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <LinkButton to={paths.expenseEdit(trip.id, expense.id)} variant="primary">
+                  <IconPencil width={17} height={17} /> Edit
+                </LinkButton>
+                <LinkButton to={paths.expenseDuplicate(trip.id, expense.id)}>
+                  <IconPlus width={17} height={17} /> Duplicate
+                </LinkButton>
+                <Button variant="danger" onClick={() => setConfirm(true)}>
+                  Delete
+                </Button>
+              </div>
+            )}
 
             <Card>
               <h2 className="mb-2 text-[15px] font-semibold">Split · {SPLIT_MODE_LABELS[expense.splitMode]}</h2>
@@ -126,5 +134,31 @@ export function ExpenseDetailPage({ tripId, expenseId }: { tripId: string; expen
         )
       }}
     </TripGuard>
+  )
+}
+
+function AddedBy({
+  tripId,
+  travellers,
+  shared,
+  createdBy,
+  updatedBy,
+}: {
+  tripId: string
+  travellers: Traveller[]
+  shared: boolean
+  createdBy: string | undefined
+  updatedBy: string | undefined
+}) {
+  const whoIs = useWhoIs(tripId, travellers)
+  if (!shared) return null
+  const added = whoIs(createdBy)
+  const edited = whoIs(updatedBy)
+  if (!added) return null
+  return (
+    <p className="text-xs text-slate-500">
+      Added by {added}
+      {edited && updatedBy !== createdBy ? ` · last edited by ${edited}` : ''}
+    </p>
   )
 }
