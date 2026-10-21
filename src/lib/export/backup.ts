@@ -127,6 +127,8 @@ function validateTrip(v: unknown, i: number): Trip {
     baseCurrency: currency(v, 'baseCurrency', where),
     budgetMinorUnits: minor(v, 'budgetMinorUnits', where),
     status: v.status === 'completed' ? 'completed' : 'active',
+    // Restored trips are always local copies; shared trips come back by signing in.
+    syncMode: 'local',
     createdAt: str(v, 'createdAt', where),
     updatedAt: str(v, 'updatedAt', where),
   }
@@ -349,7 +351,17 @@ export async function previewImport(backup: BackupFile): Promise<ImportPreview> 
   }
 }
 
-const allTables = () => [db.trips, db.travellers, db.expenses, db.expenseShares, db.categories, db.settings]
+const allTables = () => [
+  db.trips,
+  db.travellers,
+  db.expenses,
+  db.expenseShares,
+  db.categories,
+  db.settings,
+  db.outbox,
+  db.syncCursors,
+  db.members,
+]
 
 /** Adds trips and categories that are not present yet. Never overwrites. */
 export function importMerge(backup: BackupFile): Promise<{ addedTrips: number; skippedTrips: number }> {
@@ -396,6 +408,9 @@ export function importReplace(backup: BackupFile): Promise<void> {
   return trackSave(() =>
     db.transaction('rw', allTables(), async () => {
       const { data } = backup
+      if ((await db.outbox.count()) > 0) {
+        throw new Error('Some changes to shared trips have not been uploaded yet. Go online and let them sync first.')
+      }
       await Promise.all(allTables().map((t) => t.clear()))
       await db.categories.bulkAdd(data.categories)
       const present = new Set(data.categories.map((c) => c.id))

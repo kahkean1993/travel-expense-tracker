@@ -23,6 +23,12 @@ export type ISODateTime = string
 
 export type TripStatus = 'active' | 'completed'
 
+/**
+ * - local: stored only in this browser (the default, and all v1 trips).
+ * - cloud: shared through Supabase; changes sync between members' devices.
+ */
+export type SyncMode = 'local' | 'cloud'
+
 export interface Trip {
   id: ID
   name: string
@@ -35,6 +41,10 @@ export interface Trip {
   status: TripStatus
   /** True for trips created by "Load sample data". */
   isSample?: boolean
+  /** Missing means 'local'. */
+  syncMode?: SyncMode
+  /** Supabase user id of the owner, for cloud trips. */
+  ownerId?: string
   createdAt: ISODateTime
   updatedAt: ISODateTime
 }
@@ -43,6 +53,8 @@ export interface Traveller {
   id: ID
   tripId: ID
   displayName: string
+  /** Supabase user id of the member this traveller represents (cloud trips). */
+  userId?: string | null
   createdAt: ISODateTime
   updatedAt: ISODateTime
 }
@@ -120,6 +132,37 @@ export interface Category {
   name: string
   isCustom: boolean
   createdAt: ISODateTime
+}
+
+export type SyncTable = 'trips' | 'travellers' | 'expenses'
+
+/**
+ * A local change to a cloud trip that has not been uploaded yet. Keyed by
+ * table + record id, so several edits to one record upload once.
+ */
+export interface OutboxEntry {
+  key: string
+  table: SyncTable
+  recordId: ID
+  tripId: ID
+  op: 'upsert' | 'delete'
+  queuedAt: ISODateTime
+  /** Set when the server rejected this change; it is skipped until retried. */
+  error?: string
+}
+
+/** Per cloud trip: the newest server updated_at already downloaded. */
+export interface SyncCursor {
+  tripId: ID
+  pulledUntil: ISODateTime | null
+}
+
+export interface TripMember {
+  tripId: ID
+  userId: string
+  role: 'owner' | 'member'
+  email: string | null
+  joinedAt: ISODateTime
 }
 
 export interface AppSettings {

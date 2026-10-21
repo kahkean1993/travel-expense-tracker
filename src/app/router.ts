@@ -16,6 +16,7 @@ export type Route =
   | { name: 'travellers'; tripId: string }
   | { name: 'report'; tripId: string }
   | { name: 'settings' }
+  | { name: 'join'; token: string }
   | { name: 'notFound' }
 
 export function parseRoute(hash: string): Route {
@@ -26,6 +27,7 @@ export function parseRoute(hash: string): Route {
   const [a, b, c, d, e] = parts
   if (parts.length === 0) return { name: 'trips' }
   if (a === 'settings' && parts.length === 1) return { name: 'settings' }
+  if (a === 'join' && b && parts.length === 2) return { name: 'join', token: b }
   if (a !== 'trips') return { name: 'notFound' }
   if (b === 'new' && parts.length === 2) return { name: 'tripNew' }
   if (!b) return { name: 'trips' }
@@ -58,6 +60,7 @@ export const paths = {
   travellers: (id: string) => `/trips/${id}/travellers`,
   report: (id: string) => `/trips/${id}/report`,
   settings: () => '/settings',
+  join: (token: string) => `/join/${token}`,
 }
 
 export const href = (path: string) => `#${path}`

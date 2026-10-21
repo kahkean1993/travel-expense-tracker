@@ -12,6 +12,8 @@ import { isValidCurrencyCode } from '../../lib/money/money'
 import type { Category } from '../../types/domain'
 import { downloadBackup } from './backupActions'
 import { loadSampleData, removeSampleData, sampleTripIds } from './sampleData'
+import { AccountCard } from '../sharing/AccountCard'
+import { cloudConfigured } from '../../sync/cloud'
 
 export function SettingsPage() {
   const settings = useSettings()
@@ -20,10 +22,21 @@ export function SettingsPage() {
     <div className="mx-auto max-w-2xl space-y-4">
       <PageHeader title="Settings & backup" />
       <Notice>
-        <strong>Your data is stored only in this browser on this device.</strong> It is not synced to the cloud or shared
-        with other devices or people. Clearing browser data, uninstalling the browser or using private mode can erase it, so
-        download a backup regularly.
+        {cloudConfigured ? (
+          <>
+            <strong>Trips you don't share are stored only in this browser on this device.</strong> Shared trips are also
+            saved online for their members.
+          </>
+        ) : (
+          <>
+            <strong>Your data is stored only in this browser on this device.</strong> It is not synced to the cloud or shared
+            with other devices or people.
+          </>
+        )}{' '}
+        Clearing browser data, uninstalling the browser or using private mode can erase local data, so download a backup
+        regularly.
       </Notice>
+      <AccountCard />
       <BackupCard lastBackupAt={settings.lastBackupAt} changes={settings.changesSinceBackup} />
       <RestoreCard />
       <StorageCard />

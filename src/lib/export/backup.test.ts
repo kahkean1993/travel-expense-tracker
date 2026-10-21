@@ -35,7 +35,7 @@ describe('backup and restore', () => {
     if (!parsed.ok) return
     await importReplace(parsed.backup)
     const after = await snapshot()
-    expect(after.trips).toEqual(before.trips)
+    expect(after.trips).toEqual(before.trips.map((t) => ({ ...t, syncMode: 'local' })))
     expect(after.travellers).toEqual(before.travellers)
     expect(after.expenses).toEqual(before.expenses)
     expect(after.expenseShares.sort((a, b) => a.id.localeCompare(b.id))).toEqual(

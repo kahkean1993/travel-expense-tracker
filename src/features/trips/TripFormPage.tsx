@@ -8,6 +8,7 @@ import { inputClass } from '../../components/styles'
 import { CurrencySelect } from '../../components/CurrencySelect'
 import { IconPlus, IconX } from '../../components/Icons'
 import { useBusy } from '../../components/useBusy'
+import { useAuth } from '../../sync/cloud'
 import { isValidCurrencyCode, minorToInputString, parseAmountToMinor } from '../../lib/money/money'
 import { localDateString } from '../../lib/export/csv'
 import type { Trip } from '../../types/domain'
@@ -62,6 +63,10 @@ function TripForm({
   const [errors, setErrors] = useState<Errors>({})
   const [busy, run] = useBusy()
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const auth = useAuth()
+  const isShared = trip?.syncMode === 'cloud'
+  // Shared trips can only be deleted by their owner (the server enforces this too).
+  const canDelete = !isShared || (auth.status === 'signedIn' && trip?.ownerId === auth.userId)
 
   function validate(): { input: TripInput } | { errors: Errors } {
     const e: Errors = {}
@@ -279,10 +284,17 @@ function TripForm({
             >
               {trip.status === 'active' ? 'Mark as completed' : 'Reopen trip'}
             </Button>
-            <Button variant="danger" onClick={() => setConfirmDelete(true)}>
-              Delete trip
-            </Button>
+            {canDelete ? (
+              <Button variant="danger" onClick={() => setConfirmDelete(true)}>
+                {isShared ? 'Delete for everyone' : 'Delete trip'}
+              </Button>
+            ) : null}
           </div>
+          {!canDelete ? (
+            <p className="text-xs text-slate-500">
+              Only the trip owner can delete a shared trip. To remove it from your devices, leave the trip on the Split page.
+            </p>
+          ) : null}
         </Card>
       ) : null}
 
@@ -308,6 +320,11 @@ function TripForm({
             </strong>{' '}
             and its traveller list. Other trips are not affected.
           </p>
+          {isShared ? (
+            <p className="mt-2">
+              <strong>This is a shared trip:</strong> it will be deleted for every member, on all of their devices.
+            </p>
+          ) : null}
           <p className="mt-2">Consider downloading a backup from Settings first. This cannot be undone.</p>
         </ConfirmDialog>
       ) : null}
