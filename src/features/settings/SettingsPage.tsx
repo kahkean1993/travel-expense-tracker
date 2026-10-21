@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { navigate, paths } from '../../app/router'
 import { useCategories, useSettings } from '../../db/hooks'
 import { categoriesRepo, settingsRepo } from '../../db/repositories'
-import { Button, Card, ConfirmDialog, Field, FieldError, Loading, Notice, PageHeader, SectionTitle, TextInput } from '../../components/ui'
+import { Button, Card, ConfirmDialog, Disclosure, Field, FieldError, Loading, Notice, PageHeader, SectionTitle, TextInput } from '../../components/ui'
 import { CurrencySelect } from '../../components/CurrencySelect'
 import { IconDownload, IconPlus, IconUpload } from '../../components/Icons'
 import { useBusy } from '../../components/useBusy'
@@ -21,29 +21,42 @@ export function SettingsPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-4">
       <PageHeader title="Settings & backup" />
-      <Notice>
+      <p className="rounded-xl bg-slate-100 px-4 py-3 text-sm text-slate-600">
         {cloudConfigured ? (
-          <>
-            <strong>Trips you don't share are stored only in this browser on this device.</strong> Shared trips are also
-            saved online for their members.
-          </>
+          <>Trips you don't share are saved only in this browser on this device. </>
         ) : (
-          <>
-            <strong>Your data is stored only in this browser on this device.</strong> It is not synced to the cloud or shared
-            with other devices or people.
-          </>
-        )}{' '}
-        Clearing browser data, uninstalling the browser or using private mode can erase local data, so download a backup
-        regularly.
-      </Notice>
-      <AccountCard />
-      <BackupCard lastBackupAt={settings.lastBackupAt} changes={settings.changesSinceBackup} />
-      <RestoreCard />
-      <StorageCard />
-      <PreferencesCard defaultCurrency={settings.defaultBaseCurrency} />
-      <CategoriesCard />
-      <SampleDataCard />
+          <>Your trips are saved only in this browser on this device. </>
+        )}
+        Clearing browser data can erase them, so download a backup now and then.
+      </p>
+
+      <SettingsGroup title="Your data">
+        <BackupCard lastBackupAt={settings.lastBackupAt} changes={settings.changesSinceBackup} />
+        <RestoreCard />
+      </SettingsGroup>
+
+      {cloudConfigured ? (
+        <SettingsGroup title="Sharing">
+          <AccountCard />
+        </SettingsGroup>
+      ) : null}
+
+      <SettingsGroup title="More">
+        <PreferencesCard defaultCurrency={settings.defaultBaseCurrency} />
+        <CategoriesCard />
+        <StorageCard />
+        <SampleDataCard />
+      </SettingsGroup>
     </div>
+  )
+}
+
+function SettingsGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section aria-label={title} className="space-y-3">
+      <h2 className="px-1 pt-2 text-xs font-semibold tracking-wider text-slate-500 uppercase">{title}</h2>
+      {children}
+    </section>
   )
 }
 
@@ -54,8 +67,8 @@ function BackupCard({ lastBackupAt, changes }: { lastBackupAt: string | null; ch
     <Card>
       <SectionTitle>Back up</SectionTitle>
       <p className="text-sm text-slate-600">
-        Download one JSON file with every trip, expense, exchange rate, split, traveller and category. Keep it somewhere safe
-        (for example cloud drive or email to yourself) and use it to restore on this or another device.
+        One file with all your trips and expenses. Keep it somewhere safe (a cloud drive, or email it to yourself) to restore
+        later or on another phone.
       </p>
       <p className="mt-2 text-sm text-slate-700">
         {lastBackupAt
@@ -240,8 +253,7 @@ function StorageCard() {
 
   if (!supported) return null
   return (
-    <Card>
-      <SectionTitle>Storage protection</SectionTitle>
+    <Disclosure title="Storage protection" hint="Keep the browser from clearing your data">
       <p className="text-sm text-slate-600">
         Browsers may clear site data when the device is low on space. You can ask the browser to keep this app's data.
         {estimate ? ` ${estimate}.` : ''}
@@ -265,7 +277,7 @@ function StorageCard() {
           </p>
         </div>
       ) : null}
-    </Card>
+    </Disclosure>
   )
 }
 
@@ -273,8 +285,7 @@ function PreferencesCard({ defaultCurrency }: { defaultCurrency: string }) {
   const [value, setValue] = useState(defaultCurrency)
   const valid = isValidCurrencyCode(value)
   return (
-    <Card>
-      <SectionTitle>Preferences</SectionTitle>
+    <Disclosure title="Preferences" hint="Default currency for new trips">
       <Field label="Default base currency for new trips" htmlFor="default-currency" error={value && !valid && value.length === 3 ? 'Unknown currency code.' : undefined}>
         <div className="max-w-xs">
           <CurrencySelect
@@ -287,7 +298,7 @@ function PreferencesCard({ defaultCurrency }: { defaultCurrency: string }) {
           />
         </div>
       </Field>
-    </Card>
+    </Disclosure>
   )
 }
 
@@ -314,8 +325,7 @@ function CategoriesCard() {
   }
 
   return (
-    <Card>
-      <SectionTitle>Categories</SectionTitle>
+    <Disclosure title="Categories" hint="Add or rename your own">
       <ul className="divide-y divide-slate-100 text-sm">
         {global.map((c) => (
           <CategoryRow key={c.id} category={c} />
@@ -328,7 +338,7 @@ function CategoriesCard() {
         </Button>
       </form>
       {error ? <div className="mt-2"><FieldError>{error}</FieldError></div> : null}
-    </Card>
+    </Disclosure>
   )
 }
 
@@ -395,8 +405,7 @@ function SampleDataCard() {
   const [confirm, setConfirm] = useState(false)
   if (!sampleIds) return null
   return (
-    <Card>
-      <SectionTitle>Sample data</SectionTitle>
+    <Disclosure title="Sample data" hint="Try the app with a fictional trip">
       <p className="text-sm text-slate-600">
         Load a fictional trip with a few expenses to explore the app. It is labelled “Sample” and can be removed in one tap
         without touching your own trips.
@@ -429,7 +438,7 @@ function SampleDataCard() {
       >
         Only trips marked “Sample” are deleted, with their expenses. Your own trips are not affected.
       </ConfirmDialog>
-    </Card>
+    </Disclosure>
   )
 }
 

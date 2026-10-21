@@ -132,7 +132,7 @@ function Report({ data }: { data: TripData }) {
 
           <Card className="print:border-0 print:p-0">
             <h2 className="mb-2 text-base font-semibold">All expenses</h2>
-            <div className="-mx-4 overflow-x-auto print:mx-0 print:overflow-visible">
+            <div className="-mx-4 overflow-x-auto print:mx-0 print:overflow-visible" tabIndex={0} role="region" aria-label="All expenses, scrollable table">
               <table className="w-full min-w-[46rem] text-xs sm:text-sm print:min-w-0 print:text-[9pt]">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-xs text-slate-500 uppercase">

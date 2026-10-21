@@ -4,7 +4,10 @@ import {
   RemoteError,
   type ChildRow,
   type ChildTable,
+  type Invite,
   type InvitePreview,
+  type InviteTraveller,
+  type JoinPick,
   type Remote,
   type RemoteMemberRow,
   type RemoteTripRow,
@@ -110,25 +113,64 @@ export class SupabaseRemote implements Remote {
     await call(() => this.client.from(table).update({ deleted_at: new Date().toISOString() }).in('id', ids))
   }
 
-  async createInvite(tripId: string) {
+  async getActiveInvite(tripId: string): Promise<Invite | null> {
+    const row = await call<{ token: string; expires_at: string } | null>(() =>
+      this.client
+        .from('trip_invites')
+        .select('token, expires_at')
+        .eq('trip_id', tripId)
+        .is('revoked_at', null)
+        .gt('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    )
+    return row ? { token: row.token, expiresAt: row.expires_at } : null
+  }
+
+  async createInvite(tripId: string): Promise<Invite> {
     const row = await call<{ token: string; expires_at: string }>(() =>
       this.client.from('trip_invites').insert({ trip_id: tripId }).select('token, expires_at').single(),
     )
     return { token: row.token, expiresAt: row.expires_at }
   }
 
-  async previewInvite(token: string): Promise<InvitePreview | null> {
-    const rows = await call<{ trip_id: string; trip_name: string; member_count: number; already_member: boolean }[]>(() =>
-      this.client.rpc('invite_preview', { p_token: token }),
+  async revokeInvites(tripId: string) {
+    await call(() =>
+      this.client.from('trip_invites').update({ revoked_at: new Date().toISOString() }).eq('trip_id', tripId).is('revoked_at', null),
     )
+  }
+
+  async previewInvite(token: string): Promise<InvitePreview | null> {
+    const rows = await call<
+      {
+        trip_id: string
+        trip_name: string
+        member_count: number
+        already_member: boolean
+        travellers: InviteTraveller[] | null
+      }[]
+    >(() => this.client.rpc('invite_preview', { p_token: token }))
     const r = rows?.[0]
     return r
-      ? { tripId: r.trip_id, tripName: r.trip_name, memberCount: Number(r.member_count), alreadyMember: r.already_member }
+      ? {
+          tripId: r.trip_id,
+          tripName: r.trip_name,
+          memberCount: Number(r.member_count),
+          alreadyMember: r.already_member,
+          travellers: r.travellers ?? [],
+        }
       : null
   }
 
-  acceptInvite(token: string) {
-    return call<string>(() => this.client.rpc('accept_invite', { p_token: token }))
+  acceptInvite(token: string, pick: JoinPick = {}) {
+    return call<string>(() =>
+      this.client.rpc('accept_invite', {
+        p_token: token,
+        p_traveller_id: pick.travellerId ?? null,
+        p_new_traveller_name: pick.newName ?? null,
+      }),
+    )
   }
 
   async removeMember(tripId: string, userId: string) {
@@ -138,7 +180,7 @@ export class SupabaseRemote implements Remote {
   /** Calls `onChange` whenever shared rows visible to this user change. */
   subscribe(onChange: () => void): () => void {
     let channel = this.client.channel('trip-sync')
-    for (const table of ['trips', 'trip_members', 'travellers', 'expenses']) {
+    for (const table of ['trips', 'trip_members', 'travellers', 'expenses', 'settlements']) {
       channel = channel.on('postgres_changes', { event: '*', schema: 'public', table }, () => onChange())
     }
     channel.subscribe()

@@ -4,7 +4,7 @@
  * The app always reads and writes the local IndexedDB copy, so it works
  * offline. A sync run then:
  *   1. Push: uploads queued local changes (the outbox) in dependency order
- *      (trips → travellers → expenses, deletions last).
+ *      (trips → travellers → expenses → settlements, deletions last).
  *   2. Pull: for each trip the user belongs to, downloads rows the server
  *      changed since the last pull, and removes local copies of trips the
  *      user is no longer a member of.
@@ -20,12 +20,23 @@ import type { OutboxEntry, SyncTable } from '../types/domain'
 import {
   expenseFromRemote,
   expenseToRemote,
+  settlementFromRemote,
+  settlementToRemote,
   travellerFromRemote,
   travellerToRemote,
   tripFromRemote,
   tripToRemote,
 } from './mapping'
-import { RemoteError, type ChildTable, type Remote, type RemoteExpenseRow, type RemoteTravellerRow } from './remote'
+import {
+  RemoteError,
+  type ChildTable,
+  type Invite,
+  type JoinPick,
+  type Remote,
+  type RemoteExpenseRow,
+  type RemoteSettlementRow,
+  type RemoteTravellerRow,
+} from './remote'
 
 /** Re-download rows this close to the last cursor, in case of slow commits on the server. */
 const PULL_OVERLAP_MS = 60_000
@@ -43,6 +54,8 @@ const PUSH_ORDER: { table: SyncTable; op: OutboxEntry['op'] }[] = [
   { table: 'trips', op: 'upsert' },
   { table: 'travellers', op: 'upsert' },
   { table: 'expenses', op: 'upsert' },
+  { table: 'settlements', op: 'upsert' },
+  { table: 'settlements', op: 'delete' },
   { table: 'expenses', op: 'delete' },
   { table: 'travellers', op: 'delete' },
   { table: 'trips', op: 'delete' },
@@ -178,6 +191,11 @@ export class SyncEngine {
       if (rows.length) await this.remote.upsert('travellers', rows)
       return batch
     }
+    if (table === 'settlements') {
+      const rows = (await this.db.settlements.bulkGet(ids)).filter((s) => !!s).map(settlementToRemote)
+      if (rows.length) await this.remote.upsert('settlements', rows)
+      return batch
+    }
     const expenses = (await this.db.expenses.bulkGet(ids)).filter((e) => !!e)
     const categories = new Map((await this.db.categories.toArray()).map((c) => [c.id, c.name]))
     const rows: RemoteExpenseRow[] = []
@@ -228,16 +246,17 @@ export class SyncEngine {
       await this.repos.tripsRepo.removeLocalCopy(tripId)
       return
     }
-    const [travellers, expenses, members] = await Promise.all([
+    const [travellers, expenses, settlements, members] = await Promise.all([
       this.remote.fetchChanged('travellers', tripId, since),
       this.remote.fetchChanged('expenses', tripId, since),
+      this.remote.fetchChanged('settlements', tripId, since),
       this.remote.fetchMembers(tripId),
     ])
 
     const db = this.db
     await db.transaction(
       'rw',
-      [db.trips, db.travellers, db.expenses, db.expenseShares, db.categories, db.members, db.syncCursors, db.outbox],
+      [db.trips, db.travellers, db.expenses, db.expenseShares, db.settlements, db.categories, db.members, db.syncCursors, db.outbox],
       async () => {
         const pending = new Set(
           (await db.outbox.where('tripId').equals(tripId).toArray()).map((e) => e.key),
@@ -272,12 +291,18 @@ export class SyncEngine {
           }
         }
 
+        for (const row of settlements as RemoteSettlementRow[]) {
+          if (pending.has(`settlements:${row.id}`)) continue
+          if (row.deleted_at) await db.settlements.delete(row.id)
+          else await db.settlements.put(settlementFromRemote(row))
+        }
+
         await db.members.where('tripId').equals(tripId).delete()
         await db.members.bulkPut(
           members.map((m) => ({ tripId, userId: m.user_id, role: m.role, email: m.email, joinedAt: m.joined_at })),
         )
 
-        const newest = [tripRow, ...travellers, ...expenses]
+        const newest = [tripRow, ...travellers, ...expenses, ...settlements]
           .map((r) => r.updated_at ?? '')
           .reduce((a, b) => (b > a ? b : a), cursor ?? '')
         await db.syncCursors.put({ tripId, pulledUntil: newest || null })
@@ -289,19 +314,30 @@ export class SyncEngine {
 
   /**
    * Uploads a local trip and turns it into a shared trip owned by the
-   * signed-in user. Needs a connection. `meTravellerId` marks which
-   * traveller is the owner.
+   * signed-in user, with its invite link ready to send. Needs a connection.
+   * `meTravellerId` marks which traveller is the owner. Safe to repeat if an
+   * earlier attempt stopped halfway.
    */
-  async shareTrip(tripId: string, meTravellerId?: string) {
+  async shareTrip(tripId: string, meTravellerId?: string): Promise<Invite | null> {
     const userId = this.requireUser()
     const trip = await this.db.trips.get(tripId)
     if (!trip) throw new Error('Trip not found.')
-    if (isCloudTrip(trip)) return
+    if (isCloudTrip(trip)) return this.remote.getActiveInvite(tripId)
     if (trip.isSample) throw new Error('Sample trips cannot be shared. Create your own trip first.')
 
-    await this.remote.insertTrip(tripToRemote(trip, userId))
+    try {
+      await this.remote.insertTrip(tripToRemote(trip, userId))
+    } catch (error) {
+      // An earlier attempt may have created the trip online before stopping.
+      if (!(error instanceof RemoteError) || error.kind !== 'rejected') throw error
+      const existing = await this.remote.fetchTrip(tripId)
+      if (!existing || existing.owner_id !== userId) throw error
+    }
+    // Create the invite link before the trip flips to "shared" on this device,
+    // so the screen that appears next already has it.
+    const invite = (await this.remote.getActiveInvite(tripId)) ?? (await this.remote.createInvite(tripId))
     const db = this.db
-    await db.transaction('rw', [db.trips, db.travellers, db.expenses, db.outbox], async () => {
+    await db.transaction('rw', [db.trips, db.travellers, db.expenses, db.settlements, db.outbox], async () => {
       const ts = new Date().toISOString()
       await db.trips.update(tripId, { syncMode: 'cloud', ownerId: userId })
       if (meTravellerId) await db.travellers.update(meTravellerId, { userId })
@@ -309,21 +345,36 @@ export class SyncEngine {
         db.outbox.bulkPut(ids.map((id) => ({ key: `${table}:${id}`, table, recordId: id, tripId, op: 'upsert' as const, queuedAt: ts })))
       await queueAll('travellers', await db.travellers.where('tripId').equals(tripId).primaryKeys())
       await queueAll('expenses', await db.expenses.where('tripId').equals(tripId).primaryKeys())
+      await queueAll('settlements', await db.settlements.where('tripId').equals(tripId).primaryKeys())
     })
     await this.sync()
+    return invite
   }
 
-  /** Joins a trip with an invite token and downloads it. Returns the trip id. */
-  async joinWithInvite(token: string) {
+  /** Joins a trip with an invite token, links who the person is, and downloads the trip. Returns the trip id. */
+  async joinWithInvite(token: string, pick: JoinPick = {}) {
     this.requireUser()
-    const tripId = await this.remote.acceptInvite(token)
+    const tripId = await this.remote.acceptInvite(token, pick)
     await this.pullTrip(tripId)
     return tripId
   }
 
-  createInvite(tripId: string) {
+  /** The invite link that is currently switched on, if any. */
+  getInvite(tripId: string): Promise<Invite | null> {
     this.requireUser()
-    return this.remote.createInvite(tripId)
+    return this.remote.getActiveInvite(tripId)
+  }
+
+  /** Returns the working invite link, creating one if there is none. One link serves everyone. */
+  async getOrCreateInvite(tripId: string): Promise<Invite> {
+    this.requireUser()
+    return (await this.remote.getActiveInvite(tripId)) ?? (await this.remote.createInvite(tripId))
+  }
+
+  /** Switches the invite link off. */
+  switchOffInvites(tripId: string) {
+    this.requireUser()
+    return this.remote.revokeInvites(tripId)
   }
 
   /** Leaves a shared trip (members only) and removes this device's copy. */
@@ -333,10 +384,14 @@ export class SyncEngine {
     await this.repos.tripsRepo.removeLocalCopy(tripId)
   }
 
-  /** Owner removes another member. */
+  /**
+   * Owner removes another member. Existing invite links are switched off as
+   * well, so the removed person can't simply rejoin with the link they have.
+   */
   async removeMember(tripId: string, userId: string) {
     this.requireUser()
     await this.remote.removeMember(tripId, userId)
+    await this.remote.revokeInvites(tripId)
     await this.pullTrip(tripId)
   }
 

@@ -1,11 +1,13 @@
-import { useEffect, type ComponentType } from 'react'
+import { useEffect } from 'react'
 import { JoinPage } from '../features/sharing/JoinPage'
 import { SyncIndicator } from '../components/SyncIndicator'
-import { pendingInvite, useAuth } from '../sync/cloud'
-import { href, navigate, paths, useRoute, type Route } from './router'
+import { pendingInvite, pendingShare, rememberPendingShare, useAuth } from '../sync/cloud'
+import { href, navigate, paths, routeKey, useRoute, type Route } from './router'
+import { BottomBar, Sidebar } from './Navigation'
+import { hidesTabBar, sectionOf } from './sections'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { tripsRepo } from '../db/repositories'
-import { IconChart, IconList, IconPlus, IconReport, IconSettings, IconSuitcase, IconUsers } from '../components/Icons'
+import { IconSuitcase } from '../components/Icons'
 import { OnlineIndicator, SaveErrorBanner, SaveIndicator, UpdateBanner } from '../components/StatusIndicators'
 import { BackupReminder } from '../features/settings/BackupReminder'
 import { TripsPage } from '../features/trips/TripsPage'
@@ -15,6 +17,7 @@ import { ExpensesPage } from '../features/expenses/ExpensesPage'
 import { ExpenseFormPage } from '../features/expenses/ExpenseFormPage'
 import { ExpenseDetailPage } from '../features/expenses/ExpenseDetailPage'
 import { TravellersPage } from '../features/splitting/TravellersPage'
+import { PersonStatementPage } from '../features/splitting/PersonStatementPage'
 import { ReportPage } from '../features/reports/ReportPage'
 import { SettingsPage } from '../features/settings/SettingsPage'
 import { EmptyState, LinkButton } from '../components/ui'
@@ -33,50 +36,23 @@ function routeTripId(route: Route): string | null {
   return 'tripId' in route ? route.tripId : null
 }
 
-type NavKey = 'trips' | 'dashboard' | 'expenses' | 'travellers' | 'report' | 'settings'
-
-function activeNav(route: Route): NavKey | null {
-  switch (route.name) {
-    case 'trips':
-    case 'tripNew':
-    case 'tripEdit':
-      return 'trips'
-    case 'dashboard':
-      return 'dashboard'
-    case 'expenses':
-    case 'expenseNew':
-    case 'expenseView':
-    case 'expenseEdit':
-      return 'expenses'
-    case 'travellers':
-      return 'travellers'
-    case 'report':
-      return 'report'
-    case 'settings':
-    case 'join':
-      return 'settings'
-    default:
-      return null
-  }
-}
-
-interface NavItem {
-  key: NavKey
-  label: string
-  to: string
-  Icon: ComponentType<{ width?: number; height?: number }>
-}
-
 export function App() {
   const route = useRoute()
   const currentTripId = routeTripId(route)
   const lastTripId = currentTripId ?? readLastTrip()
   const auth = useAuth()
 
-  // After signing in from an invite link, continue joining that trip.
+  // The sign-in email opens the home page. Continue what the person was doing:
+  // joining a trip from an invite link, or sharing one of their trips.
   useEffect(() => {
-    const token = auth.status === 'signedIn' ? pendingInvite() : null
-    if (token && route.name !== 'join') navigate(paths.join(token))
+    if (auth.status !== 'signedIn') return
+    const token = pendingInvite()
+    if (token && route.name !== 'join') return navigate(paths.join(token))
+    const tripId = pendingShare()
+    if (tripId) {
+      rememberPendingShare(null)
+      navigate(paths.travellers(tripId))
+    }
   }, [auth.status, route.name])
 
   useEffect(() => {
@@ -94,23 +70,8 @@ export function App() {
     [currentTripId, lastTripId],
   )
   const tripId = contextTrip?.id ?? null
-
-  const nav: NavItem[] = [{ key: 'trips', label: 'Trips', to: paths.trips(), Icon: IconSuitcase }]
-  if (tripId) {
-    nav.push(
-      { key: 'dashboard', label: 'Dashboard', to: paths.dashboard(tripId), Icon: IconChart },
-      { key: 'expenses', label: 'Expenses', to: paths.expenses(tripId), Icon: IconList },
-      { key: 'travellers', label: 'Split', to: paths.travellers(tripId), Icon: IconUsers },
-      { key: 'report', label: 'Report', to: paths.report(tripId), Icon: IconReport },
-    )
-  }
-  nav.push({ key: 'settings', label: 'Backup', to: paths.settings(), Icon: IconSettings })
-  const active = activeNav(route)
-
-  const showFab =
-    currentTripId !== null &&
-    contextTrip?.id === currentTripId &&
-    (route.name === 'dashboard' || route.name === 'expenses' || route.name === 'travellers' || route.name === 'expenseView')
+  const section = sectionOf(route, tripId !== null)
+  const hideTabs = hidesTabBar(route)
 
   return (
     <div className="min-h-dvh md:flex">
@@ -118,96 +79,41 @@ export function App() {
         Skip to content
       </a>
 
-      {/* Desktop sidebar */}
-      <aside className="no-print sticky top-0 hidden h-dvh w-56 shrink-0 flex-col border-r border-slate-200 bg-white md:flex">
-        <a href={href(paths.trips())} className="flex items-center gap-2 px-5 py-5 font-semibold text-slate-900">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-700 text-white">
-            <IconSuitcase width={18} height={18} />
-          </span>
-          Trip Expenses
-        </a>
-        {contextTrip ? (
-          <p className="truncate px-5 pb-2 text-xs font-medium uppercase tracking-wide text-slate-500" title={contextTrip.name}>
-            {contextTrip.name}
-          </p>
-        ) : null}
-        <nav aria-label="Main" className="flex flex-col gap-0.5 px-3">
-          {nav.map((item) => (
-            <a
-              key={item.key}
-              href={href(item.to)}
-              aria-current={active === item.key ? 'page' : undefined}
-              className={`flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm ${
-                active === item.key ? 'bg-accent-50 font-medium text-accent-800' : 'text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              <item.Icon width={18} height={18} />
-              {item.key === 'settings' ? 'Settings & Backup' : item.key === 'travellers' ? 'Travellers & Split' : item.label}
-            </a>
-          ))}
-        </nav>
-        <p className="mt-auto px-5 py-4 text-xs text-slate-500">
-          {auth.status === 'disabled' ? 'Data is stored only in this browser on this device.' : 'Trips you don’t share stay on this device only.'}
-        </p>
-      </aside>
+      <Sidebar
+        tripId={tripId}
+        tripName={contextTrip?.name}
+        section={section}
+        footer={auth.status === 'disabled' ? 'Data is stored only in this browser on this device.' : 'Trips you don’t share stay on this device only.'}
+      />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="no-print sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
-          <div className="mx-auto flex h-12 max-w-5xl items-center justify-between gap-2 px-4">
-            <a href={href(paths.trips())} className="flex min-w-0 items-center gap-2 font-semibold text-slate-900 md:hidden">
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent-700 text-white">
-                <IconSuitcase width={16} height={16} />
+        <header className="no-print sticky top-0 z-20 border-b border-slate-200/70 bg-white/90 backdrop-blur">
+          <div className="mx-auto flex h-14 max-w-5xl items-center justify-between gap-2 px-4">
+            <a href={href(paths.trips())} className="flex min-w-0 items-center gap-2.5 font-semibold text-slate-900 md:invisible">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent-700 text-white">
+                <IconSuitcase width={17} height={17} />
               </span>
-              <span className="truncate">{contextTrip && currentTripId ? contextTrip.name : 'Trip Expenses'}</span>
+              <span className="truncate">Trip Expenses</span>
             </a>
-            <span className="hidden md:block" />
             <div className="flex items-center gap-2">
               <OnlineIndicator />
               <SyncIndicator />
               <SaveIndicator />
             </div>
           </div>
-        </div>
+        </header>
         <SaveErrorBanner />
         <UpdateBanner />
 
-        <main id="main" className="mx-auto w-full max-w-5xl flex-1 px-4 pt-4 pb-36 md:pb-12 print:p-0">
+        <main id="main" className={`mx-auto w-full max-w-5xl flex-1 px-4 pt-5 md:pb-12 print:p-0 ${hideTabs ? 'pb-40' : 'pb-28'}`}>
           <BackupReminder />
-          <Screen route={route} />
+          <div key={routeKey(route)} className="animate-enter">
+            <Screen route={route} />
+          </div>
         </main>
       </div>
 
-      {showFab ? (
-        <a
-          href={href(paths.expenseNew(currentTripId))}
-          className="no-print fixed right-4 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-30 inline-flex min-h-14 items-center gap-2 rounded-full bg-accent-700 px-5 font-semibold text-white shadow-lg shadow-slate-900/20 hover:bg-accent-800 md:right-8 md:bottom-8"
-        >
-          <IconPlus /> Add Expense
-        </a>
-      ) : null}
-
-      {/* Mobile bottom navigation */}
-      <nav
-        aria-label="Main"
-        className="no-print fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] md:hidden"
-      >
-        <ul className="mx-auto flex max-w-lg">
-          {nav.map((item) => (
-            <li key={item.key} className="flex-1">
-              <a
-                href={href(item.to)}
-                aria-current={active === item.key ? 'page' : undefined}
-                className={`flex min-h-14 flex-col items-center justify-center gap-0.5 text-[11px] ${
-                  active === item.key ? 'font-semibold text-accent-700' : 'text-slate-600'
-                }`}
-              >
-                <item.Icon width={20} height={20} />
-                {item.label}
-              </a>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      {hideTabs ? null : <BottomBar tripId={tripId} section={section} />}
     </div>
   )
 }
@@ -237,6 +143,8 @@ function Screen({ route }: { route: Route }) {
       return <ExpenseDetailPage tripId={route.tripId} expenseId={route.expenseId} />
     case 'travellers':
       return <TravellersPage tripId={route.tripId} />
+    case 'person':
+      return <PersonStatementPage tripId={route.tripId} travellerId={route.travellerId} />
     case 'report':
       return <ReportPage tripId={route.tripId} />
     case 'settings':

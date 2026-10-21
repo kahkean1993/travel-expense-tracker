@@ -6,7 +6,7 @@ import { sendSignInEmail, verifySignInCode } from '../../sync/cloud'
 const RESEND_SECONDS = 60
 
 /** Email sign-in: sends a link, and also accepts the 6-digit code from the same email. */
-export function SignInForm({ intro }: { intro?: React.ReactNode }) {
+export function SignInForm({ intro, onEmailSent }: { intro?: React.ReactNode; onEmailSent?: () => void }) {
   const [email, setEmail] = useState('')
   const [sentTo, setSentTo] = useState<string | null>(null)
   const [code, setCode] = useState('')
@@ -28,6 +28,7 @@ export function SignInForm({ intro }: { intro?: React.ReactNode }) {
     void run(async () => {
       try {
         await sendSignInEmail(address)
+        onEmailSent?.()
         setSentTo(address)
         setWait(RESEND_SECONDS)
       } catch (err) {

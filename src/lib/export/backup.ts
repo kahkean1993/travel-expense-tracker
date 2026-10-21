@@ -1,15 +1,15 @@
 /**
  * JSON backup and restore.
  *
- * Backup file format (formatVersion 1):
+ * Backup file format (formatVersion 2; version 1 files have no "settlements" and still restore):
  * {
  *   "format": "travel-expense-tracker-backup",
- *   "formatVersion": 1,
- *   "dbSchemaVersion": 1,
+ *   "formatVersion": 2,
+ *   "dbSchemaVersion": 3,
  *   "exportedAt": "2026-01-31T12:00:00.000Z",
  *   "data": {
  *     "trips": Trip[], "travellers": Traveller[], "expenses": Expense[],
- *     "expenseShares": ExpenseShare[], "categories": Category[],
+ *     "expenseShares": ExpenseShare[], "settlements": Settlement[], "categories": Category[],
  *     "settings": AppSettings | null
  *   }
  * }
@@ -31,19 +31,21 @@ import {
   type Category,
   type Expense,
   type ExpenseShare,
+  type Settlement,
   type Traveller,
   type Trip,
 } from '../../types/domain'
 import { convertMinorUnits, isWellFormedCurrencyCode, MAX_MINOR_UNITS, parseExchangeRate } from '../money/money'
 
 export const BACKUP_FORMAT = 'travel-expense-tracker-backup'
-export const BACKUP_FORMAT_VERSION = 1
+export const BACKUP_FORMAT_VERSION = 2
 
 export interface BackupData {
   trips: Trip[]
   travellers: Traveller[]
   expenses: Expense[]
   expenseShares: ExpenseShare[]
+  settlements: Settlement[]
   categories: Category[]
   settings: AppSettings | null
 }
@@ -57,7 +59,7 @@ export interface BackupFile {
 }
 
 export async function createBackup(): Promise<BackupFile> {
-  return db.transaction('r', [db.trips, db.travellers, db.expenses, db.expenseShares, db.categories, db.settings], async () => ({
+  return db.transaction('r', [db.trips, db.travellers, db.expenses, db.expenseShares, db.settlements, db.categories, db.settings], async () => ({
     format: BACKUP_FORMAT,
     formatVersion: BACKUP_FORMAT_VERSION,
     dbSchemaVersion: DB_SCHEMA_VERSION,
@@ -67,6 +69,7 @@ export async function createBackup(): Promise<BackupFile> {
       travellers: await db.travellers.toArray(),
       expenses: await db.expenses.toArray(),
       expenseShares: await db.expenseShares.toArray(),
+      settlements: await db.settlements.toArray(),
       categories: await db.categories.toArray(),
       settings: (await db.settings.get('app')) ?? null,
     },
@@ -211,6 +214,25 @@ function validateShare(v: unknown, i: number): ExpenseShare {
   return s
 }
 
+function validateSettlement(v: unknown, i: number): Settlement {
+  const where = `Payment #${i + 1}`
+  check(isObj(v), `${where} is not an object.`)
+  const s: Settlement = {
+    id: str(v, 'id', where),
+    tripId: str(v, 'tripId', where),
+    fromTravellerId: str(v, 'fromTravellerId', where),
+    toTravellerId: str(v, 'toTravellerId', where),
+    amountMinorUnits: minor(v, 'amountMinorUnits', where),
+    paidOn: date(v, 'paidOn', where),
+    note: str(v, 'note', where, { empty: true }),
+    createdAt: str(v, 'createdAt', where),
+    updatedAt: typeof v.updatedAt === 'string' ? v.updatedAt : str(v, 'createdAt', where),
+  }
+  check(s.amountMinorUnits > 0, `${where}: amount must be greater than zero.`)
+  check(s.fromTravellerId !== s.toTravellerId, `${where}: someone cannot pay themselves.`)
+  return s
+}
+
 function validateCategory(v: unknown, i: number): Category {
   const where = `Category #${i + 1}`
   check(isObj(v), `${where} is not an object.`)
@@ -270,6 +292,8 @@ export function parseBackup(text: string): { ok: true; backup: BackupFile } | { 
       travellers: arr(d, 'travellers').map(validateTraveller),
       expenses: arr(d, 'expenses').map(validateExpense),
       expenseShares: arr(d, 'expenseShares').map(validateShare),
+      // Version 1 backups were made before payments existed.
+      settlements: d.settlements === undefined && raw.formatVersion < 2 ? [] : arr(d, 'settlements').map(validateSettlement),
       categories: arr(d, 'categories').map(validateCategory),
       settings: validateSettings(d.settings),
     }
@@ -277,6 +301,7 @@ export function parseBackup(text: string): { ok: true; backup: BackupFile } | { 
     uniqueIds(data.travellers, 'traveller')
     uniqueIds(data.expenses, 'expense')
     uniqueIds(data.expenseShares, 'expense share')
+    uniqueIds(data.settlements, 'payment')
     uniqueIds(data.categories, 'category')
 
     // Referential integrity.
@@ -298,6 +323,13 @@ export function parseBackup(text: string): { ok: true; backup: BackupFile } | { 
       check(e && e.tripId === s.tripId, 'An expense share refers to a missing expense.')
       check(travellers.get(s.travellerId)?.tripId === s.tripId, 'An expense share refers to an unknown traveller.')
       shareTotals.set(s.expenseId, (shareTotals.get(s.expenseId) ?? 0) + s.allocatedBaseAmountMinorUnits)
+    }
+    for (const s of data.settlements) {
+      check(trips.has(s.tripId), 'A payment belongs to a missing trip.')
+      check(
+        travellers.get(s.fromTravellerId)?.tripId === s.tripId && travellers.get(s.toTravellerId)?.tripId === s.tripId,
+        'A payment refers to an unknown traveller.',
+      )
     }
     for (const e of data.expenses) {
       check(
@@ -327,6 +359,7 @@ export interface ImportPreview {
   exportedAt: string
   trips: { id: string; name: string; expenses: number; exists: boolean }[]
   totalExpenses: number
+  totalPayments: number
   newTrips: number
   existingTrips: number
   newCategories: number
@@ -345,6 +378,7 @@ export async function previewImport(backup: BackupFile): Promise<ImportPreview> 
     exportedAt: backup.exportedAt,
     trips,
     totalExpenses: backup.data.expenses.length,
+    totalPayments: backup.data.settlements.length,
     newTrips: trips.filter((t) => !t.exists).length,
     existingTrips: trips.filter((t) => t.exists).length,
     newCategories: backup.data.categories.filter((c) => !existingCats.has(c.id)).length,
@@ -356,6 +390,7 @@ const allTables = () => [
   db.travellers,
   db.expenses,
   db.expenseShares,
+  db.settlements,
   db.categories,
   db.settings,
   db.outbox,
@@ -376,10 +411,12 @@ export function importMerge(backup: BackupFile): Promise<{ addedTrips: number; s
       const travellers = data.travellers.filter((t) => ids.has(t.tripId))
       const expenses = data.expenses.filter((e) => ids.has(e.tripId))
       const shares = data.expenseShares.filter((s) => ids.has(s.tripId))
+      const payments = data.settlements.filter((s) => ids.has(s.tripId))
       const clash =
         (await db.travellers.bulkGet(travellers.map((t) => t.id))).some(Boolean) ||
         (await db.expenses.bulkGet(expenses.map((e) => e.id))).some(Boolean) ||
-        (await db.expenseShares.bulkGet(shares.map((s) => s.id))).some(Boolean)
+        (await db.expenseShares.bulkGet(shares.map((s) => s.id))).some(Boolean) ||
+        (await db.settlements.bulkGet(payments.map((s) => s.id))).some(Boolean)
       if (clash) throw new Error('Some records in this backup clash with existing data. Use "Replace all data" instead.')
       // A backup category with the same name as a local one is merged into it.
       const localByName = new Map((await db.categories.toArray()).map((c) => [c.name.toLowerCase(), c.id]))
@@ -396,6 +433,7 @@ export function importMerge(backup: BackupFile): Promise<{ addedTrips: number; s
       await db.travellers.bulkAdd(travellers)
       await db.expenses.bulkAdd(expenses.map((e) => ({ ...e, categoryId: categoryIdMap.get(e.categoryId) ?? e.categoryId })))
       await db.expenseShares.bulkAdd(shares)
+      await db.settlements.bulkAdd(payments)
       const settings = (await db.settings.get('app')) ?? defaultSettings()
       await db.settings.put({ ...settings, changesSinceBackup: settings.changesSinceBackup + 1 })
       return { addedTrips: newTrips.length, skippedTrips: data.trips.length - newTrips.length }
@@ -419,6 +457,7 @@ export function importReplace(backup: BackupFile): Promise<void> {
       await db.travellers.bulkAdd(data.travellers)
       await db.expenses.bulkAdd(data.expenses)
       await db.expenseShares.bulkAdd(data.expenseShares)
+      await db.settlements.bulkAdd(data.settlements)
       const imported = data.settings ?? defaultSettings()
       await db.settings.put({
         ...defaultSettings(),

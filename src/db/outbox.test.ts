@@ -36,7 +36,7 @@ describe('schema v2 upgrade', () => {
     const v2 = new TravelDb(name)
     await v2.open()
     expect(await v2.trips.get('t1')).toMatchObject({ name: 'Old trip', syncMode: 'local' })
-    expect((await v2.settings.get('app'))?.schemaVersion).toBe(2)
+    expect((await v2.settings.get('app'))?.schemaVersion).toBe(3)
     expect(await v2.outbox.count()).toBe(0)
     await v2.delete()
   })
@@ -56,8 +56,8 @@ describe('outbox', () => {
     await addExpense(trip, travellers, { amount: '6' })
     const sam = await travellersRepo.add(trip.id, 'Sam')
     await travellersRepo.rename(sam.id, 'Samantha')
-    await tripsRepo.setStatus(trip.id, 'completed')
     await expensesRepo.delete(e.id)
+    await tripsRepo.setStatus(trip.id, 'completed')
 
     const entries = await db.outbox.toArray()
     expect(entries.map((x) => `${x.table}:${x.op}`).sort()).toEqual([

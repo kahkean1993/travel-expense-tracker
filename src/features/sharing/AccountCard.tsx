@@ -35,9 +35,16 @@ export function AccountCard() {
         </>
       ) : (
         <div className="space-y-3 text-sm">
-          <p>
-            Signed in as <strong>{auth.email}</strong>
-          </p>
+          {auth.anonymous ? (
+            <p>
+              You joined shared trips <strong>without an email</strong>. This phone is your account: if you clear browser data or
+              switch phones, open the invite link again and pick your name.
+            </p>
+          ) : (
+            <p>
+              Signed in as <strong>{auth.email}</strong>
+            </p>
+          )}
           <p className="text-slate-700" aria-live="polite">
             {status.phase === 'syncing'
               ? 'Syncing…'
@@ -96,8 +103,11 @@ export function AccountCard() {
         }
       >
         <p>
-          {cloudTrips} shared trip{cloudTrips === 1 ? '' : 's'} will be removed from this device. They stay online, and come
-          back when you sign in again. Trips that aren't shared stay on this device.
+          {cloudTrips} shared trip{cloudTrips === 1 ? '' : 's'} will be removed from this device.{' '}
+          {auth.status === 'signedIn' && auth.anonymous
+            ? 'You joined without an email, so to get back in you will need the invite link again.'
+            : 'They stay online, and come back when you sign in again.'}{' '}
+          Trips that aren't shared stay on this device.
         </p>
         {pending ? (
           <div className="mt-2">

@@ -109,6 +109,28 @@ export interface Expense {
   payerNameSnapshot: string
   notes: string
   splitMode: SplitMode
+  /** Supabase user ids of who first added / last changed it (shared trips only). */
+  createdBy?: string
+  updatedBy?: string
+  createdAt: ISODateTime
+  updatedAt: ISODateTime
+}
+
+/**
+ * A recorded payment towards settling up: `fromTravellerId` paid
+ * `toTravellerId` this amount. Integer minor units of the trip base currency.
+ * Balances and the "who pays whom" suggestions take these into account.
+ */
+export interface Settlement {
+  id: ID
+  tripId: ID
+  fromTravellerId: ID
+  toTravellerId: ID
+  amountMinorUnits: number
+  paidOn: ISODate
+  note: string
+  /** Supabase user id of who recorded it (shared trips only). */
+  createdBy?: string
   createdAt: ISODateTime
   updatedAt: ISODateTime
 }
@@ -134,7 +156,7 @@ export interface Category {
   createdAt: ISODateTime
 }
 
-export type SyncTable = 'trips' | 'travellers' | 'expenses'
+export type SyncTable = 'trips' | 'travellers' | 'expenses' | 'settlements'
 
 /**
  * A local change to a cloud trip that has not been uploaded yet. Keyed by
