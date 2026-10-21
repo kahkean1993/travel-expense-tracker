@@ -3,7 +3,7 @@ import { href, paths, useRoute, type Route } from './router'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { tripsRepo } from '../db/repositories'
 import { IconChart, IconList, IconPlus, IconReport, IconSettings, IconSuitcase, IconUsers } from '../components/Icons'
-import { OnlineIndicator, SaveErrorBanner, SaveIndicator } from '../components/StatusIndicators'
+import { OnlineIndicator, SaveErrorBanner, SaveIndicator, UpdateBanner } from '../components/StatusIndicators'
 import { BackupReminder } from '../features/settings/BackupReminder'
 import { TripsPage } from '../features/trips/TripsPage'
 import { TripFormPage } from '../features/trips/TripFormPage'
@@ -155,6 +155,7 @@ export function App() {
           </div>
         </div>
         <SaveErrorBanner />
+        <UpdateBanner />
 
         <main id="main" className="mx-auto w-full max-w-5xl flex-1 px-4 pt-4 pb-36 md:pb-12 print:p-0">
           <BackupReminder />

@@ -20,6 +20,20 @@ describe('currency precision', () => {
     expect(currencyFractionDigits('KWD')).toBe(3)
   })
 
+  it('does not depend on the browser\'s Intl data', () => {
+    // Intl reports 0 or 2 for IDR depending on the ICU version; storage must not change.
+    expect(currencyFractionDigits('IDR')).toBe(2)
+    expect(currencyFractionDigits('HUF')).toBe(2)
+    expect(currencyFractionDigits('TWD')).toBe(2)
+    expect(currencyFractionDigits('VND')).toBe(0)
+    expect(currencyFractionDigits('CLF')).toBe(4)
+  })
+
+  it('formats with exactly the stored precision', () => {
+    expect(formatMoney(5000050, 'IDR', 'en-US')).toMatch(/50,000\.50$/)
+    expect(formatMoney(1234, 'KWD', 'en-US')).toMatch(/1\.234$/)
+  })
+
   it('validates currency codes', () => {
     expect(isValidCurrencyCode('MYR')).toBe(true)
     expect(isValidCurrencyCode('TWD')).toBe(true)

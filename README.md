@@ -16,7 +16,7 @@ A mobile-first web app for recording trip spending, tracking a budget, splitting
 - **Report**: a printable on-screen report (navigation and buttons are hidden when printed). It has trip details, budget difference, totals by category and by day, per-traveller balances, settlement suggestions and the full expense list with rates and splits.
 - **Exports**: an Excel-compatible CSV (UTF-8 BOM, CRLF, RFC 4180 quoting, formula-injection guard) and a full JSON backup. Restoring a backup validates it, previews it, and then lets you either *add new trips* (merge) or *replace all data*.
 - **Resilience**: a "Saving… / Saved" indicator that only says Saved after the write succeeds. Write failures show a visible error with recovery advice. Double taps can't create duplicate saves. After 20 changes, a gentle reminder suggests making a backup. On supported browsers you can ask the browser to protect stored data from automatic clearing.
-- **Offline / PWA**: the app shell is precached by a service worker. After the first load you can open the app, view expenses and add expenses with no connection. An "Offline" badge appears when you're disconnected.
+- **Offline / PWA**: the app shell is precached by a service worker. After the first load you can open the app, view expenses and add expenses with no connection. An "Offline" badge appears when you're disconnected. When a new version is deployed, a banner offers to reload; the app never reloads by itself mid-entry.
 - **Sample data**: Settings → Load sample data creates a fictional trip marked "Sample". You can remove it in one tap without touching your own trips.
 
 ## Getting started
@@ -66,13 +66,13 @@ The workflow derives `BASE_PATH` from the repository name automatically, so scri
 
 - **Back up**: Settings & Backup → *Download backup* saves `travel-expenses-backup-YYYY-MM-DD.json`, which contains every trip, traveller, expense, exchange rate, share, category and preference. Store it somewhere safe.
 - **Restore**: Settings & Backup → *Choose backup file*. The file is fully validated first (structure, currency codes, integer amounts, rates that reproduce the converted amounts, shares that add up, links between records). Nothing changes until you confirm one of these:
-  - **Add new trips**: adds only trips whose IDs aren't already on this device, so existing trips are never overwritten. This is how you move a trip from one device to another.
+  - **Add new trips**: adds only trips whose IDs aren't already on this device, so existing trips are never overwritten. Custom categories with the same name as an existing one are merged into it. This is how you move a trip from one device to another.
   - **Replace all data**: deletes everything currently stored and loads the backup, in a single transaction. If it fails, nothing changes.
 - **Moving between devices**: download a backup on device A, open the app on device B, then restore. There is no live sync in version 1.
 
 ## How money is handled
 
-- Amounts are stored as **integers in the currency's minor unit** (sen for MYR, yen for JPY, etc.), using `Intl` fraction digits per ISO 4217 (MYR 2, JPY 0, KRW 0, KWD 3…).
+- Amounts are stored as **integers in the currency's minor unit** (sen for MYR, yen for JPY, etc.). The number of decimals comes from a fixed ISO 4217 table in `src/lib/money/money.ts` (MYR 2, IDR 2, JPY 0, KRW 0, KWD 3…), not from the browser, because browsers disagree (some report 0 decimals for IDR). Changing an entry in that table requires a data migration.
 - Exchange rates are stored as **decimal strings** meaning "1 original currency = rate base currency" (up to 10 decimal places).
 - Conversion uses **BigInt** arithmetic and rounds **half-up once**, at save time, to the base currency's precision. Totals are integer sums. No floating-point maths touches stored amounts.
 - If the expense currency equals the trip base currency, the rate is forced to `1` and the amount is not converted.
@@ -120,7 +120,7 @@ The schema lives in `src/db/schema.ts` (`DB_SCHEMA_VERSION = 1`). To change it, 
 
 ## Testing
 
-`npm test` runs 54 tests covering:
+`npm test` runs 57 tests covering:
 
 - money: precision, parsing and validation, conversion direction, half-up rounding, tiny amounts, mixed currencies, formatting
 - splitting: equal and weighted remainders, custom amount validation, personal expenses, the payer's own share, balances summing to zero, and randomised settlement checks

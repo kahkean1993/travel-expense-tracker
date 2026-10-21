@@ -52,16 +52,28 @@ export function isValidCurrencyCode(code: string): boolean {
   }
 }
 
-const digitsCache = new Map<string, number>()
+/**
+ * ISO 4217 minor-unit exponents for currencies that do not use 2 decimals.
+ * This table is part of the storage format: stored minor units are read
+ * with these digits, so they must never depend on the browser's Intl data
+ * (which differs between versions, e.g. IDR is 2 in some and 0 in others).
+ * Changing an existing entry requires a data migration.
+ */
+const ISO_MINOR_UNITS: Record<string, number> = {
+  BIF: 0, CLP: 0, DJF: 0, GNF: 0, ISK: 0, JPY: 0, KMF: 0, KRW: 0, PYG: 0,
+  RWF: 0, UGX: 0, UYI: 0, VND: 0, VUV: 0, XAF: 0, XOF: 0, XPF: 0,
+  BHD: 3, IQD: 3, JOD: 3, KWD: 3, LYD: 3, OMR: 3, TND: 3,
+  CLF: 4, UYW: 4,
+}
 
-/** Number of minor-unit digits for a currency, e.g. MYR → 2, JPY → 0. */
+/** Number of minor-unit digits for a currency per ISO 4217, e.g. MYR → 2, JPY → 0. */
 export function currencyFractionDigits(code: CurrencyCode): number {
-  const cached = digitsCache.get(code)
-  if (cached !== undefined) return cached
-  const digits = new Intl.NumberFormat('en', { style: 'currency', currency: code }).resolvedOptions()
-    .maximumFractionDigits ?? 2
-  digitsCache.set(code, digits)
-  return digits
+  return ISO_MINOR_UNITS[code] ?? 2
+}
+
+/** Three upper-case letters. Used for stored data, which may come from another browser. */
+export function isWellFormedCurrencyCode(code: string): boolean {
+  return /^[A-Z]{3}$/.test(code)
 }
 
 /** Converts minor units to a plain decimal string, e.g. (1234, 2) → "12.34". */
@@ -187,7 +199,15 @@ function formatter(currency: CurrencyCode, locale?: string): Intl.NumberFormat {
   const key = `${locale ?? ''}|${currency}`
   let f = formatterCache.get(key)
   if (!f) {
-    f = new Intl.NumberFormat(locale, { style: 'currency', currency, currencyDisplay: 'symbol' })
+    const digits = currencyFractionDigits(currency)
+    // Pin decimals to the stored precision so display never rounds a saved amount.
+    f = new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency,
+      currencyDisplay: 'symbol',
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    })
     formatterCache.set(key, f)
   }
   return f

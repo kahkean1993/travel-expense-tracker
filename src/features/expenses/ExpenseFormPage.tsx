@@ -175,7 +175,7 @@ function ExpenseForm({
           </Notice>
         </div>
       ) : null}
-      {mode === 'duplicate' ? (
+      {mode === 'duplicate' && addedCount === 0 ? (
         <div className="mb-3">
           <Notice>This is a copy with today's date. Check the details, then save it as a new expense.</Notice>
         </div>

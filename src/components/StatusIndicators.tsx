@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { useSaveState } from '../db/saveStatus'
+import { useAppUpdate } from '../app/pwaUpdate'
 import { IconAlert, IconCheck, IconCloudOff } from './Icons'
 
 export function SaveIndicator() {
@@ -49,6 +50,22 @@ export function SaveErrorBanner() {
         </p>
         <button type="button" className="underline" onClick={() => setDismissedFor(state.message)}>
           Dismiss
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** Shown when a new version of the app has been downloaded. */
+export function UpdateBanner() {
+  const applyUpdate = useAppUpdate()
+  if (!applyUpdate) return null
+  return (
+    <div className="no-print border-b border-accent-100 bg-accent-50 px-4 py-2 text-sm text-accent-800" role="status">
+      <div className="mx-auto flex max-w-5xl items-center gap-3">
+        <p className="flex-1">A new version of the app is available. Your data is kept when you reload.</p>
+        <button type="button" className="font-medium underline" onClick={applyUpdate}>
+          Reload
         </button>
       </div>
     </div>
