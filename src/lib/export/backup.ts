@@ -138,6 +138,15 @@ function validateTrip(v: unknown, i: number): Trip {
   check(v.status === 'active' || v.status === 'completed', `${where}: unknown status.`)
   check(t.endDate >= t.startDate, `${where}: end date is before start date.`)
   if (v.isSample === true) t.isSample = true
+  if (v.categoryBudgets !== undefined) {
+    check(isObj(v.categoryBudgets), `${where}: category budgets are not valid.`)
+    const budgets: Record<string, number> = {}
+    for (const [id, amount] of Object.entries(v.categoryBudgets)) {
+      check(typeof amount === 'number' && Number.isSafeInteger(amount) && amount >= 0 && amount <= MAX_MINOR_UNITS, `${where}: a category budget is not valid.`)
+      if (amount > 0) budgets[id] = amount
+    }
+    if (Object.keys(budgets).length) t.categoryBudgets = budgets
+  }
   return t
 }
 
@@ -227,6 +236,14 @@ function validateSettlement(v: unknown, i: number): Settlement {
     note: str(v, 'note', where, { empty: true }),
     createdAt: str(v, 'createdAt', where),
     updatedAt: typeof v.updatedAt === 'string' ? v.updatedAt : str(v, 'createdAt', where),
+  }
+  if (v.originalCurrency !== undefined) {
+    const rate = parseExchangeRate(str(v, 'exchangeRate', where))
+    check(rate.ok, `${where}: invalid exchange rate.`)
+    s.originalCurrency = currency(v, 'originalCurrency', where)
+    s.exchangeRate = rate.value
+    s.originalAmountMinorUnits = minor(v, 'originalAmountMinorUnits', where)
+    check(s.originalAmountMinorUnits > 0, `${where}: original amount must be greater than zero.`)
   }
   check(s.amountMinorUnits > 0, `${where}: amount must be greater than zero.`)
   check(s.fromTravellerId !== s.toTravellerId, `${where}: someone cannot pay themselves.`)

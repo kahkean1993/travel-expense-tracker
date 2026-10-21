@@ -236,3 +236,28 @@ export function cumulativeSeries(trip: Trip, expenses: Expense[], today: ISODate
   }
   return points
 }
+
+export interface CategoryBudgetRow {
+  id: ID
+  name: string
+  budget: number
+  spent: number
+  percent: number
+  level: 'ok' | 'warning' | 'over'
+}
+
+/** Spending against each category that has its own budget, fullest first. */
+export function categoryBudgetRows(trip: Trip, expenses: Expense[], categories: Category[]): CategoryBudgetRow[] {
+  const budgets = trip.categoryBudgets ?? {}
+  const spentBy = new Map<ID, number>()
+  for (const e of expenses) spentBy.set(e.categoryId, (spentBy.get(e.categoryId) ?? 0) + e.baseAmountMinorUnits)
+  const names = new Map(categories.map((c) => [c.id, c.name]))
+  const rows: CategoryBudgetRow[] = []
+  for (const [id, budget] of Object.entries(budgets)) {
+    if (!(budget > 0)) continue
+    const spent = spentBy.get(id) ?? 0
+    const percent = percentUsed(spent, budget) ?? 0
+    rows.push({ id, name: names.get(id) ?? 'Removed category', budget, spent, percent, level: percent >= 100 ? 'over' : percent >= 80 ? 'warning' : 'ok' })
+  }
+  return rows.sort((a, b) => b.percent - a.percent || a.name.localeCompare(b.name))
+}

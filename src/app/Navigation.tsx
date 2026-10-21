@@ -46,7 +46,7 @@ function CentreAction({ to, label, hint }: { to: string; label: string; hint: st
   return (
     <li>
       <a href={href(to)} aria-label={label} className="press flex min-h-16 flex-col items-center justify-end gap-0.5 pb-1.5 text-[11px] font-semibold text-accent-800">
-        <span className="-mt-5 flex size-14 items-center justify-center rounded-full bg-accent-700 text-white shadow-raised ring-4 ring-white">
+        <span className="-mt-5 flex size-14 items-center justify-center rounded-full bg-accent-700 text-white shadow-raised ring-4 ring-surface">
           <IconPlus width={26} height={26} />
         </span>
         <span aria-hidden="true">{hint}</span>
@@ -61,7 +61,7 @@ export function BottomBar({ tripId, section }: { tripId: string | null; section:
     <>
       <nav
         aria-label="Main"
-        className="no-print fixed inset-x-0 bottom-0 z-30 border-t border-slate-200/70 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+        className="no-print fixed inset-x-0 bottom-0 z-30 border-t border-slate-200/70 bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
       >
         {tripId ? (
           <ul className="mx-auto grid max-w-lg grid-cols-5 px-1">
@@ -142,7 +142,7 @@ function SideLink({ to, label, Icon, active }: { to: string; label: string; Icon
 
 export function Sidebar({ tripId, tripName, section, footer }: { tripId: string | null; tripName: string | undefined; section: Section; footer: ReactNode }) {
   return (
-    <aside className="no-print sticky top-0 hidden h-dvh w-60 shrink-0 flex-col border-r border-slate-200/70 bg-white md:flex">
+    <aside className="no-print sticky top-0 hidden h-dvh w-60 shrink-0 flex-col border-r border-slate-200/70 bg-surface md:flex">
       <a href={href(paths.trips())} className="flex items-center gap-2.5 px-5 py-5 font-semibold text-slate-900">
         <span className="flex size-9 items-center justify-center rounded-xl bg-accent-700 text-white">
           <IconSuitcase width={18} height={18} />

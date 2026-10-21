@@ -12,6 +12,7 @@ import { PAYMENT_METHOD_LABELS, type Traveller } from '../../types/domain'
 import { SPLIT_MODE_LABELS } from './labels'
 import { TripLockedBanner } from './TripLockedBanner'
 import { useWhoIs } from './useWhoIs'
+import { ReceiptGallery } from './Receipts'
 
 export function ExpenseDetailPage({ tripId, expenseId }: { tripId: string; expenseId: string }) {
   const [confirm, setConfirm] = useState(false)
@@ -86,6 +87,8 @@ export function ExpenseDetailPage({ tripId, expenseId }: { tripId: string; expen
                 </Button>
               </div>
             )}
+
+            <ReceiptGallery expenseId={expense.id} canEdit={trip.status !== 'completed'} />
 
             <Card>
               <h2 className="mb-2 text-[15px] font-semibold">Split · {SPLIT_MODE_LABELS[expense.splitMode]}</h2>

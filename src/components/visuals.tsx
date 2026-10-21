@@ -26,10 +26,10 @@ export function AvatarStack({ names, max = 4 }: { names: string[]; max?: number 
   return (
     <span className="inline-flex items-center" aria-hidden="true">
       {shown.map((n, i) => (
-        <Avatar key={`${n}-${i}`} name={n} size="sm" className="-ml-2 ring-2 ring-white first:ml-0" />
+        <Avatar key={`${n}-${i}`} name={n} size="sm" className="-ml-2 ring-2 ring-surface first:ml-0" />
       ))}
       {extra > 0 ? (
-        <span className="-ml-2 inline-flex size-7 items-center justify-center rounded-full bg-slate-100 text-[11px] font-semibold text-slate-600 ring-2 ring-white">
+        <span className="-ml-2 inline-flex size-7 items-center justify-center rounded-full bg-slate-100 text-[11px] font-semibold text-slate-600 ring-2 ring-surface">
           +{extra}
         </span>
       ) : null}

@@ -38,6 +38,8 @@ export interface Trip {
   baseCurrency: CurrencyCode
   /** Budget in minor units of baseCurrency. 0 means "no budget set". */
   budgetMinorUnits: number
+  /** Optional budget per category (category id → minor units of baseCurrency). */
+  categoryBudgets?: Record<ID, number>
   status: TripStatus
   /** True for trips created by "Load sample data". */
   isSample?: boolean
@@ -129,11 +131,32 @@ export interface Settlement {
   amountMinorUnits: number
   paidOn: ISODate
   note: string
+  /** When the payment was made in another currency: what was handed over, and the rate used. */
+  originalAmountMinorUnits?: number
+  originalCurrency?: CurrencyCode
+  exchangeRate?: string
   /** Supabase user id of who recorded it (shared trips only). */
   createdBy?: string
   createdAt: ISODateTime
   updatedAt: ISODateTime
 }
+
+/** A photo of a receipt attached to an expense. The file is kept in IndexedDB (and in Storage for shared trips). */
+export interface Receipt {
+  id: ID
+  tripId: ID
+  expenseId: ID
+  mimeType: string
+  sizeBytes: number
+  /** Missing on a phone that has not downloaded the photo yet. */
+  blob?: Blob
+  createdBy?: string
+  createdAt: ISODateTime
+  updatedAt: ISODateTime
+}
+
+export const MAX_RECEIPTS_PER_EXPENSE = 3
+export const MAX_RECEIPT_BYTES = 2 * 1024 * 1024
 
 export interface ExpenseShare {
   id: ID
@@ -156,7 +179,7 @@ export interface Category {
   createdAt: ISODateTime
 }
 
-export type SyncTable = 'trips' | 'travellers' | 'expenses' | 'settlements'
+export type SyncTable = 'trips' | 'travellers' | 'expenses' | 'settlements' | 'receipts'
 
 /**
  * A local change to a cloud trip that has not been uploaded yet. Keyed by

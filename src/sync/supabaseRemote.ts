@@ -113,6 +113,21 @@ export class SupabaseRemote implements Remote {
     await call(() => this.client.from(table).update({ deleted_at: new Date().toISOString() }).in('id', ids))
   }
 
+  async uploadReceipt(tripId: string, receiptId: string, blob: Blob) {
+    const { error } = await this.client.storage.from('receipts').upload(`${tripId}/${receiptId}`, blob, { contentType: blob.type, upsert: true })
+    if (error) throw toRemoteError({ message: error.message })
+  }
+
+  async downloadReceipt(tripId: string, receiptId: string) {
+    const { data, error } = await this.client.storage.from('receipts').download(`${tripId}/${receiptId}`)
+    if (error || !data) throw toRemoteError({ message: error?.message ?? 'Could not download the photo.' })
+    return data
+  }
+
+  async removeReceiptFiles(files: { tripId: string; receiptId: string }[]) {
+    await this.client.storage.from('receipts').remove(files.map((f) => `${f.tripId}/${f.receiptId}`))
+  }
+
   async getActiveInvite(tripId: string): Promise<Invite | null> {
     const row = await call<{ token: string; expires_at: string } | null>(() =>
       this.client
@@ -180,7 +195,7 @@ export class SupabaseRemote implements Remote {
   /** Calls `onChange` whenever shared rows visible to this user change. */
   subscribe(onChange: () => void): () => void {
     let channel = this.client.channel('trip-sync')
-    for (const table of ['trips', 'trip_members', 'travellers', 'expenses', 'settlements']) {
+    for (const table of ['trips', 'trip_members', 'travellers', 'expenses', 'settlements', 'receipts']) {
       channel = channel.on('postgres_changes', { event: '*', schema: 'public', table }, () => onChange())
     }
     channel.subscribe()

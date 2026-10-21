@@ -3,8 +3,13 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { navigate, paths } from '../../app/router'
 import { TripGuard } from '../../components/TripGuard'
 import type { TripData } from '../../db/hooks'
-import { expensesRepo } from '../../db/repositories'
+import { expensesRepo, type ExpenseRecord, type ShareRecord } from '../../db/repositories'
 import { TripLockedNotice } from './TripLockedNotice'
+import { PendingReceipts } from './Receipts'
+import { receiptsRepo } from '../../db/repositories'
+import { ItemisedSheet, type ItemisedApply } from './ItemisedSheet'
+import { repeatPlan, type RepeatMode } from './repeat'
+import { toBaseAmounts } from '../splitting/itemised'
 import { Button, ChipGroup, EmptyState, Field, FieldError, LinkButton, Loading, Money, Notice, PageHeader, TextInput } from '../../components/ui'
 import { cardClass, inputClass } from '../../components/styles'
 import { Avatar, CategoryIcon } from '../../components/visuals'
@@ -12,7 +17,8 @@ import { markJustSaved } from './justSaved'
 import { CurrencySelect } from '../../components/CurrencySelect'
 import { useBusy } from '../../components/useBusy'
 import { useAuth } from '../../sync/cloud'
-import { currencySymbol, minorToInputString } from '../../lib/money/money'
+import { convertMinorUnits, currencySymbol, minorToInputString, parseExchangeRate } from '../../lib/money/money'
+import { fetchLiveRate } from '../../lib/rates'
 import { localDateString } from '../../lib/export/csv'
 import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS, type Expense, type ExpenseShare, type PaymentMethod } from '../../types/domain'
 import { evaluateExpenseForm, formFromExpense, type ExpenseFormValues } from './expenseDraft'
@@ -90,6 +96,11 @@ function ExpenseForm({
       rateFor: (currency) => lastRateFor(expenses, currency),
     })
   })
+  const [photos, setPhotos] = useState<Blob[]>([])
+  const [repeatDays, setRepeatDays] = useState('')
+  const [repeatMode, setRepeatMode] = useState<RepeatMode>('split')
+  const [itemised, setItemised] = useState(false)
+  const [itemisedError, setItemisedError] = useState<string | null>(null)
   const [submitted, setSubmitted] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [addedCount, setAddedCount] = useState(0)
@@ -107,7 +118,22 @@ function ExpenseForm({
   const names = new Map(travellers.map((t) => [t.id, t.displayName]))
   const sym = currencySymbol(trip.baseCurrency)
 
+  const [rateNote, setRateNote] = useState<{ ok: boolean; text: string } | null>(null)
+  const [rateBusy, runRate] = useBusy()
+  function useLive() {
+    void runRate(async () => {
+      const found = await fetchLiveRate(values.currency, trip.baseCurrency)
+      if (found.ok) {
+        set('rate', found.value.rate)
+        setRateNote({ ok: true, text: `Rate from ${found.value.date || 'today'} (market rate, your card may differ).` })
+      } else {
+        setRateNote({ ok: false, text: found.error })
+      }
+    })
+  }
+
   function changeCurrency(code: string) {
+    setRateNote(null)
     setValues((v) => {
       if (code === trip.baseCurrency) return { ...v, currency: code, rate: '1' }
       const remembered = lastRateFor(expenses, code)
@@ -127,6 +153,36 @@ function ExpenseForm({
         participantIds: participants,
       }
     })
+  }
+
+  function applyItemised(r: ItemisedApply) {
+    const currency = values.currency.trim().toUpperCase()
+    let baseTotal = r.total
+    if (currency !== trip.baseCurrency) {
+      const rate = parseExchangeRate(values.rate)
+      if (!rate.ok) {
+        setItemised(false)
+        setItemisedError('Enter the exchange rate first, then split by item again.')
+        return
+      }
+      try {
+        baseTotal = convertMinorUnits(r.total, currency, trip.baseCurrency, rate.value)
+      } catch {
+        setItemised(false)
+        setItemisedError('That total is too large to convert.')
+        return
+      }
+    }
+    const amounts = toBaseAmounts(r.perPerson, baseTotal)
+    setValues((v) => ({
+      ...v,
+      amount: minorToInputString(r.total, currency),
+      splitMode: 'custom_amount',
+      participantIds: travellers.map((t) => t.id).filter((id) => amounts.has(id)),
+      customAmounts: Object.fromEntries([...amounts].map(([id, a]) => [id, minorToInputString(a, trip.baseCurrency)])),
+    }))
+    setItemisedError(null)
+    setItemised(false)
   }
 
   function selectEveryone() {
@@ -151,12 +207,42 @@ function ExpenseForm({
       requestAnimationFrame(() => document.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus())
       return
     }
+    const days = mode === 'edit' ? 1 : Number(repeatDays) || 1
+    if (days > 1) {
+      if (!Number.isInteger(days) || days > 31) return setSaveError('Repeat for between 2 and 31 days.')
+      if (values.splitMode === 'custom_amount') return setSaveError('Repeating needs an equal, share-based or single-person split.')
+      const plan = repeatPlan(values.date, result.record.originalAmountMinorUnits, days, repeatMode)
+      const items: { record: ExpenseRecord; shares: ShareRecord[] }[] = []
+      for (const [i, day] of plan.entries()) {
+        const ev = evaluateExpenseForm(
+          { ...values, amount: minorToInputString(day.amount, values.currency.trim().toUpperCase()), date: day.date, description: `${values.description.trim()} (day ${i + 1} of ${days})` },
+          trip,
+          travellers,
+        )
+        if (!ev.result) return setSaveError(`Day ${i + 1}: ${Object.values(ev.errors)[0] ?? 'this amount cannot be split that way.'}`)
+        items.push({ record: ev.result.record, shares: ev.result.shares })
+      }
+      void run(async () => {
+        try {
+          const saved = await expensesRepo.saveMany(items)
+          for (const p of photos) await receiptsRepo.add(saved[0]!.id, p)
+          markJustSaved(saved[0]!.id)
+          saveLastEntry(trip.id, lastEntryFromForm(values))
+          navigate(paths.expenses(trip.id), { replace: true })
+        } catch (err) {
+          setSaveError(err instanceof Error ? err.message : 'Could not save these expenses.')
+        }
+      })
+      return
+    }
     void run(async () => {
       try {
         const saved = await expensesRepo.save(mode === 'edit' ? source!.id : undefined, result.record, result.shares)
+        if (mode !== 'edit') for (const p of photos) await receiptsRepo.add(saved.id, p)
         markJustSaved(saved.id)
         saveLastEntry(trip.id, lastEntryFromForm(values))
         if (addAnother) {
+          setPhotos([])
           setValues((v) => ({ ...v, amount: '', description: '', notes: '', customAmounts: {} }))
           setSubmitted(false)
           setAddedCount((c) => c + 1)
@@ -199,6 +285,8 @@ function ExpenseForm({
           <Notice>This is a copy with today's date. Check the details, then save it as a new expense.</Notice>
         </div>
       ) : null}
+
+      <ItemisedSheet open={itemised} travellers={travellers} currency={values.currency.trim().toUpperCase() || trip.baseCurrency} onClose={() => setItemised(false)} onApply={applyItemised} />
 
       <form onSubmit={onSubmit} noValidate className="space-y-4">
         {/* Amount first: it is what you type most. */}
@@ -252,6 +340,14 @@ function ExpenseForm({
                   onChange={(e) => set('rate', e.target.value)}
                   aria-invalid={!!errors.rate}
                 />
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Button className="min-h-9 px-3" disabled={rateBusy} onClick={useLive}>
+                  {rateBusy ? 'Looking up…' : "Use today's rate"}
+                </Button>
+                {rateNote ? (
+                  <span role="status" className={`text-xs ${rateNote.ok ? 'text-slate-600' : 'text-amber-800'}`}>{rateNote.text}</span>
+                ) : null}
               </div>
               {errors.rate ? (
                 <div className="mt-1.5">
@@ -309,7 +405,7 @@ function ExpenseForm({
                     className={`press flex min-h-[5.25rem] flex-col items-center justify-center gap-1.5 rounded-2xl border px-1 py-2.5 text-center text-[11.5px] leading-tight break-words ${
                       selected
                         ? 'border-accent-700 bg-accent-50 font-semibold text-accent-800 ring-2 ring-accent-700/25'
-                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                        : 'border-slate-200 bg-surface text-slate-700 hover:border-slate-300 hover:bg-slate-50'
                     }`}
                   >
                     <CategoryIcon id={c.id} name={c.name} />
@@ -331,7 +427,43 @@ function ExpenseForm({
               aria-invalid={!!errors.date}
             />
           </Field>
+
+          {mode !== 'edit' ? (
+            <details className="group" open={Number(repeatDays) > 1 || undefined}>
+              <summary className="press flex min-h-11 cursor-pointer items-center text-sm font-medium text-accent-700 marker:content-none">Repeat over several days (hotel nights, daily pass)</summary>
+              <div className="mt-2 flex flex-col gap-2">
+              <Field label="Repeat for more days (optional)" htmlFor="repeat-days" hint="For hotel nights or a daily pass. Creates one expense per day.">
+                <input
+                  id="repeat-days"
+                  className={`${inputClass} max-w-40`}
+                  inputMode="numeric"
+                  placeholder="1 day"
+                  value={repeatDays}
+                  onChange={(e) => setRepeatDays(e.target.value.replace(/\D/g, '').slice(0, 2))}
+                />
+              </Field>
+              {Number(repeatDays) > 1 ? (
+                <ChipGroup<RepeatMode>
+                  label="The amount above is"
+                  options={[
+                    { value: 'split', label: 'The total for all days' },
+                    { value: 'each', label: 'The amount per day' },
+                  ]}
+                  value={repeatMode}
+                  onChange={setRepeatMode}
+                />
+              ) : null}
+              </div>
+            </details>
+          ) : null}
         </section>
+
+        {mode !== 'edit' ? (
+          <section className={cardClass}>
+            <h2 className="sr-only">Receipt photos</h2>
+            <PendingReceipts photos={photos} onChange={setPhotos} />
+          </section>
+        ) : null}
 
         <section className={`${cardClass} space-y-5`}>
           <h2 className="sr-only">Payment</h2>
@@ -391,6 +523,11 @@ function ExpenseForm({
                       onChange={(m) => set('splitMode', m as 'custom_amount' | 'custom_weight')}
                     />
                   ) : null}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button onClick={() => { setItemisedError(null); setItemised(true) }}>Split by item</Button>
+                    <span className="text-xs text-slate-500">Add each dish or item and tick who had it.</span>
+                  </div>
+                  {itemisedError ? <FieldError>{itemisedError}</FieldError> : null}
                   <fieldset>
                     <legend className="mb-2 flex w-full items-center justify-between text-sm font-medium text-slate-700">
                       People sharing
@@ -488,7 +625,7 @@ function ExpenseForm({
           ) : null}
         </section>
 
-        <details className="group rounded-2xl border border-slate-200/70 bg-white shadow-card">
+        <details className="group rounded-2xl border border-slate-200/70 bg-surface shadow-card">
           <summary className="press flex min-h-12 cursor-pointer items-center justify-between rounded-2xl px-4 text-sm font-medium text-slate-700 marker:content-none">
             Notes and card name
             <span className="text-xs font-normal text-slate-500">optional</span>
@@ -525,7 +662,7 @@ function ExpenseForm({
         {submitted && !evaluation.result ? <Notice tone="danger">Please fix the highlighted fields before saving.</Notice> : null}
 
         {/* One clear save bar, fixed to the bottom on phones. */}
-        <div className="no-print fixed inset-x-0 bottom-0 z-30 border-t border-slate-200/70 bg-white/95 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur md:static md:z-auto md:mt-2 md:border-0 md:bg-transparent md:p-0 md:backdrop-blur-none">
+        <div className="no-print fixed inset-x-0 bottom-0 z-30 border-t border-slate-200/70 bg-surface/95 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur md:static md:z-auto md:mt-2 md:border-0 md:bg-transparent md:p-0 md:backdrop-blur-none">
           <div className="mx-auto flex max-w-xl gap-2">
             {mode !== 'edit' ? (
               <Button disabled={busy} onClick={() => save(true)} className="min-h-12 flex-1">

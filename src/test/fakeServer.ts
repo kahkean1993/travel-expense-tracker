@@ -14,6 +14,7 @@ import {
   type Remote,
   type RemoteExpenseRow,
   type RemoteMemberRow,
+  type RemoteReceiptRow,
   type RemoteSettlementRow,
   type RemoteTravellerRow,
   type RemoteTripRow,
@@ -32,6 +33,9 @@ export class FakeServer {
   travellers = new Map<string, Stored<RemoteTravellerRow>>()
   expenses = new Map<string, Stored<RemoteExpenseRow>>()
   settlements = new Map<string, Stored<RemoteSettlementRow>>()
+  receipts = new Map<string, Stored<RemoteReceiptRow>>()
+  /** Receipt files, keyed by "<trip id>/<receipt id>". */
+  files = new Map<string, Blob>()
 
   /** Strictly increasing server clock. */
   now() {
@@ -62,7 +66,13 @@ export class FakeRemote implements Remote {
 
   private table<T extends ChildTable>(table: T) {
     const map =
-      table === 'travellers' ? this.server.travellers : table === 'settlements' ? this.server.settlements : this.server.expenses
+      table === 'travellers'
+        ? this.server.travellers
+        : table === 'settlements'
+          ? this.server.settlements
+          : table === 'receipts'
+            ? this.server.receipts
+            : this.server.expenses
     return map as unknown as Map<string, Stored<ChildRow<T>>>
   }
 
@@ -132,6 +142,15 @@ export class FakeRemote implements Remote {
       this.assertMember(row.trip_id)
       const existing = target.get(row.id)
       if (existing && existing.trip_id !== row.trip_id) throw new RemoteError('rejected', 'trip_id cannot change')
+      if (table === 'receipts') {
+        const r = row as RemoteReceiptRow
+        if (this.server.expenses.get(r.expense_id)?.trip_id !== r.trip_id) throw new RemoteError('rejected', 'The expense must be on this trip')
+        if (!r.deleted_at) {
+          const live = [...this.server.receipts.values()].filter((x) => x.expense_id === r.expense_id && !x.deleted_at && x.id !== r.id)
+          if (live.length >= 3) throw new RemoteError('rejected', 'An expense can have at most 3 receipt photos')
+        }
+        if (!this.server.files.has(`${r.trip_id}/${r.id}`)) throw new RemoteError('rejected', 'The photo file is missing')
+      }
       if (table === 'settlements') {
         const s = row as RemoteSettlementRow
         if (s.from_traveller_id === s.to_traveller_id) throw new RemoteError('rejected', 'Someone cannot pay themselves')
@@ -178,7 +197,9 @@ export class FakeRemote implements Remote {
           ? this.server.travellers
           : table === 'settlements'
             ? this.server.settlements
-            : this.server.expenses
+            : table === 'receipts'
+              ? this.server.receipts
+              : this.server.expenses
     if (table === 'expenses') {
       for (const id of ids) {
         const tripId = this.server.expenses.get(id)?.trip_id
@@ -196,6 +217,25 @@ export class FakeRemote implements Remote {
       row.deleted_at = this.server.now()
       row.updated_at = this.server.now()
     }
+  }
+
+  async uploadReceipt(tripId: string, receiptId: string, blob: Blob) {
+    this.check()
+    if (!this.isMember(tripId)) throw new RemoteError('rejected', 'new row violates row-level security policy')
+    if (blob.size > 2 * 1024 * 1024) throw new RemoteError('rejected', 'The object exceeded the maximum allowed size')
+    this.server.files.set(`${tripId}/${receiptId}`, blob)
+  }
+
+  async downloadReceipt(tripId: string, receiptId: string) {
+    this.check()
+    const file = this.isMember(tripId) ? this.server.files.get(`${tripId}/${receiptId}`) : undefined
+    if (!file) throw new RemoteError('rejected', 'Object not found')
+    return file
+  }
+
+  async removeReceiptFiles(files: { tripId: string; receiptId: string }[]) {
+    this.check()
+    for (const f of files) if (this.isMember(f.tripId)) this.server.files.delete(`${f.tripId}/${f.receiptId}`)
   }
 
   async getActiveInvite(tripId: string): Promise<Invite | null> {

@@ -43,15 +43,15 @@ export function PaceCard({ data, today }: { data: TripData; today: string }) {
           <p className="text-2xl font-semibold text-accent-900">
             {pace.safePerDay !== null ? <Money minor={pace.safePerDay} currency={cur} /> : 'Budget used up'}
           </p>
-          <p className="text-xs text-accent-800/90">
+          <p className="text-xs text-accent-800">
             {pace.daysLeft} day{pace.daysLeft === 1 ? '' : 's'} left including today
           </p>
         </div>
       ) : null}
       <p className={`text-sm font-medium ${tone}`}>{status}</p>
-      <svg viewBox={`0 0 ${w} ${h}`} className="mt-2 h-32 w-full" role="img" aria-label={`Spending against budget plan. ${status}.`}>
-        <path d={line((p) => p.plan)} fill="none" strokeWidth={2} strokeDasharray="5 4" className="stroke-slate-400" />
-        <path d={line((p) => p.actual)} fill="none" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" className="stroke-accent-700" />
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="mt-2 h-32 w-full" role="img" aria-label={`Spending against budget plan. ${status}.`}>
+        <path d={line((p) => p.plan)} fill="none" strokeWidth={2} strokeDasharray="5 4" vectorEffect="non-scaling-stroke" className="stroke-slate-400" />
+        <path d={line((p) => p.actual)} fill="none" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" className="stroke-accent-700" />
       </svg>
       <p className="mt-1 flex gap-4 text-xs text-slate-600">
         <span className="flex items-center gap-1.5"><span className="h-0.5 w-4 bg-accent-700" /> Spent</span>

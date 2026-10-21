@@ -1,6 +1,6 @@
 /** Converts between local (Dexie) records and server rows. */
-import { PAYMENT_METHODS, SPLIT_MODES, type Expense, type ExpenseShare, type Settlement, type Traveller, type Trip } from '../types/domain'
-import type { RemoteExpenseRow, RemoteSettlementRow, RemoteTravellerRow, RemoteTripRow } from './remote'
+import { PAYMENT_METHODS, SPLIT_MODES, type Expense, type ExpenseShare, type Receipt, type Settlement, type Traveller, type Trip } from '../types/domain'
+import type { RemoteExpenseRow, RemoteReceiptRow, RemoteSettlementRow, RemoteTravellerRow, RemoteTripRow } from './remote'
 
 export function tripToRemote(t: Trip, ownerId: string): RemoteTripRow {
   return {
@@ -13,6 +13,7 @@ export function tripToRemote(t: Trip, ownerId: string): RemoteTripRow {
     base_currency: t.baseCurrency,
     budget_minor: t.budgetMinorUnits,
     status: t.status,
+    category_budgets: t.categoryBudgets ?? {},
     created_at: t.createdAt,
   }
 }
@@ -27,6 +28,9 @@ export function tripFromRemote(r: RemoteTripRow): Trip {
     baseCurrency: r.base_currency,
     budgetMinorUnits: Number(r.budget_minor),
     status: r.status,
+    ...(r.category_budgets && Object.keys(r.category_budgets).length
+      ? { categoryBudgets: Object.fromEntries(Object.entries(r.category_budgets).map(([k, v]) => [k, Number(v)])) }
+      : {}),
     syncMode: 'cloud',
     ownerId: r.owner_id,
     createdAt: r.created_at,
@@ -136,6 +140,9 @@ export function settlementToRemote(s: Settlement): RemoteSettlementRow {
     amount_minor: s.amountMinorUnits,
     paid_on: s.paidOn,
     note: s.note,
+    ...(s.originalCurrency
+      ? { original_amount_minor: s.originalAmountMinorUnits ?? null, original_currency: s.originalCurrency, exchange_rate: s.exchangeRate ?? null }
+      : {}),
     created_at: s.createdAt,
   }
 }
@@ -149,7 +156,29 @@ export function settlementFromRemote(r: RemoteSettlementRow): Settlement {
     amountMinorUnits: Number(r.amount_minor),
     paidOn: r.paid_on,
     note: r.note,
+    ...(r.original_currency && r.original_amount_minor && r.exchange_rate
+      ? { originalAmountMinorUnits: Number(r.original_amount_minor), originalCurrency: r.original_currency, exchangeRate: r.exchange_rate }
+      : {}),
     createdBy: r.created_by ?? undefined,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at ?? r.created_at,
+  }
+}
+
+export function receiptToRemote(r: Receipt): RemoteReceiptRow {
+  return { id: r.id, trip_id: r.tripId, expense_id: r.expenseId, mime_type: r.mimeType, size_bytes: r.sizeBytes, created_at: r.createdAt }
+}
+
+/** Server row → local receipt; `existing` keeps a photo this phone already has. */
+export function receiptFromRemote(r: RemoteReceiptRow, existing?: Receipt): Receipt {
+  return {
+    id: r.id,
+    tripId: r.trip_id,
+    expenseId: r.expense_id,
+    mimeType: r.mime_type,
+    sizeBytes: Number(r.size_bytes),
+    ...(existing?.blob ? { blob: existing.blob } : {}),
+    ...(r.created_by ? { createdBy: r.created_by } : {}),
     createdAt: r.created_at,
     updatedAt: r.updated_at ?? r.created_at,
   }

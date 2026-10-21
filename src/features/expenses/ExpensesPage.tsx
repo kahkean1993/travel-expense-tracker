@@ -18,7 +18,7 @@ export function ExpensesPage({ tripId }: { tripId: string }) {
   return <TripGuard tripId={tripId}>{(data) => <ExpenseList data={data} />}</TripGuard>
 }
 
-const selectClass = 'min-h-12 w-full rounded-xl border border-slate-300 bg-white px-3 text-base'
+const selectClass = 'min-h-12 w-full rounded-xl border border-slate-300 bg-surface px-3 text-base'
 
 function ExpenseList({ data }: { data: TripData }) {
   const { trip, expenses, categories, travellers } = data
@@ -117,7 +117,7 @@ function ExpenseList({ data }: { data: TripData }) {
       </div>
 
       {showFilters ? (
-        <div id="expense-filters" className="animate-enter mb-3 grid grid-cols-1 gap-3 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-card sm:grid-cols-2 lg:grid-cols-3">
+        <div id="expense-filters" className="animate-enter mb-3 grid grid-cols-1 gap-3 rounded-2xl border border-slate-200/70 bg-surface p-4 shadow-card sm:grid-cols-2 lg:grid-cols-3">
           <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
             From
             <input type="date" className={inputClass} value={filter.from} onChange={(e) => update({ from: e.target.value })} />
@@ -188,7 +188,7 @@ function ExpenseList({ data }: { data: TripData }) {
         <label className="flex items-center gap-2">
           <span className="sr-only">Sort by</span>
           <select
-            className="min-h-10 rounded-full border border-slate-300 bg-white pr-2 pl-3 text-sm text-slate-700"
+            className="min-h-10 rounded-full border border-slate-300 bg-surface pr-2 pl-3 text-sm text-slate-700"
             value={sort}
             onChange={(e) => setSort(e.target.value as ExpenseSort)}
           >
@@ -216,7 +216,7 @@ function ExpenseList({ data }: { data: TripData }) {
                   <Money minor={sumMinor(g.items.map((e) => e.baseAmountMinorUnits))} currency={trip.baseCurrency} className="font-medium text-slate-500" />
                 </h2>
               ) : null}
-              <ul className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-card">
+              <ul className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200/70 bg-surface shadow-card">
                 {g.items.map((e) => (
                   <ExpenseRow
                     key={e.id}

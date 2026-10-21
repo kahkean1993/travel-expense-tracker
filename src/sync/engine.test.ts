@@ -16,7 +16,7 @@ function device(server: FakeServer, userId: string, options: { anonymous?: boole
   const db = new TravelDb(`device-${userId}-${Math.random()}`)
   opened.push(db)
   const engine = new SyncEngine(db, server.device(userId, options))
-  const { tripsRepo, travellersRepo, expensesRepo, categoriesRepo, settlementsRepo } = engine.repos
+  const { tripsRepo, travellersRepo, expensesRepo, categoriesRepo, settlementsRepo, receiptsRepo } = engine.repos
   return {
     db,
     engine,
@@ -25,6 +25,7 @@ function device(server: FakeServer, userId: string, options: { anonymous?: boole
     expensesRepo,
     categoriesRepo,
     settlementsRepo,
+    receiptsRepo,
     async addExpense(tripId: string, over: Partial<ExpenseFormValues>) {
       const trip = (await tripsRepo.get(tripId))!
       const travellers = await travellersRepo.listByTrip(tripId)
@@ -431,5 +432,73 @@ describe('settlement payments over sync', () => {
     const failed = await bob.db.outbox.filter((e) => !!e.error).toArray()
     expect(failed.map((f) => f.table)).toEqual(['expenses'])
     expect(failed[0]!.error).toMatch(/completed/)
+  })
+})
+
+describe('receipt photos over sync', () => {
+  const photo = (text = 'photo') => new Blob([text], { type: 'image/jpeg' })
+
+  it('uploads a photo, lets the other phone download it, and removes it for both', async () => {
+    const { alice, bob, server, tripId } = await sharedTrip()
+    const [expense] = await alice.expensesRepo.listByTrip(tripId)
+    const receipt = await alice.receiptsRepo.add(expense!.id, photo('receipt-1'))
+    await alice.engine.sync()
+    expect(server.files.has(`${tripId}/${receipt.id}`)).toBe(true)
+    expect(server.receipts.get(receipt.id)).toMatchObject({ expense_id: expense!.id, created_by: 'alice' })
+
+    await bob.engine.sync()
+    const [seen] = await bob.receiptsRepo.listByExpense(expense!.id)
+    expect(seen).toMatchObject({ id: receipt.id, createdBy: 'alice' })
+    expect(seen!.blob).toBeUndefined() // not downloaded yet
+    const blob = await bob.engine.receiptBlob(seen!)
+    expect(await blob!.text()).toBe('receipt-1')
+    expect((await bob.db.receipts.get(receipt.id))!.blob).toBeDefined() // kept for offline use
+
+    await bob.receiptsRepo.remove(receipt.id)
+    await bob.engine.sync()
+    expect(server.files.has(`${tripId}/${receipt.id}`)).toBe(false)
+    await alice.engine.sync()
+    expect(await alice.receiptsRepo.listByExpense(expense!.id)).toEqual([])
+  })
+
+  it('keeps at most 3 photos per expense', async () => {
+    const { alice, tripId } = await sharedTrip()
+    const [expense] = await alice.expensesRepo.listByTrip(tripId)
+    for (let i = 0; i < 3; i++) await alice.receiptsRepo.add(expense!.id, photo(`p${i}`))
+    await expect(alice.receiptsRepo.add(expense!.id, photo('p4'))).rejects.toThrow(/up to 3/)
+    await expect(alice.receiptsRepo.add(expense!.id, new Blob(['x'], { type: 'application/pdf' }))).rejects.toThrow(/JPEG/)
+    await expect(alice.receiptsRepo.add(expense!.id, new Blob([new Uint8Array(2 * 1024 * 1024 + 1)], { type: 'image/jpeg' }))).rejects.toThrow(/too large/)
+  })
+
+  it('removing an expense removes its photos', async () => {
+    const { alice, server, tripId } = await sharedTrip()
+    const [expense] = await alice.expensesRepo.listByTrip(tripId)
+    const receipt = await alice.receiptsRepo.add(expense!.id, photo())
+    await alice.engine.sync()
+    await alice.expensesRepo.delete(expense!.id)
+    await alice.engine.sync()
+    expect(server.files.has(`${tripId}/${receipt.id}`)).toBe(false)
+    expect(server.receipts.get(receipt.id)!.deleted_at).toBeTruthy()
+  })
+
+  it('does not hand photos to people outside the trip', async () => {
+    const { alice, server, tripId } = await sharedTrip()
+    const [expense] = await alice.expensesRepo.listByTrip(tripId)
+    const receipt = await alice.receiptsRepo.add(expense!.id, photo())
+    await alice.engine.sync()
+    const outsider = server.device('mallory')
+    await expect(outsider.downloadReceipt(tripId, receipt.id)).rejects.toThrow()
+  })
+
+  it('keeps local photos for local-only trips and never uploads them', async () => {
+    const server = new FakeServer()
+    const solo = device(server, 'solo')
+    await solo.db.open()
+    const trip = await solo.tripsRepo.create(tripInput(), ['Me'])
+    const [me] = await solo.travellersRepo.listByTrip(trip.id)
+    const e = await solo.addExpense(trip.id, { amount: '5', payerId: me!.id })
+    await solo.receiptsRepo.add(e.id, photo())
+    expect(await solo.db.outbox.count()).toBe(0)
+    expect(server.files.size).toBe(0)
   })
 })

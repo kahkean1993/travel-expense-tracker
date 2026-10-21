@@ -4,7 +4,9 @@ import './index.css'
 import { App } from './app/App'
 import { startServiceWorker } from './app/pwaUpdate'
 import { startCloud } from './sync/cloud'
+import { startTheme } from './lib/theme'
 
+startTheme()
 startServiceWorker()
 startCloud()
 
