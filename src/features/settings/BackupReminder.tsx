@@ -16,7 +16,7 @@ export function BackupReminder() {
   const due = settings.changesSinceBackup >= REMIND_AFTER && settings.changesSinceBackup >= settings.backupReminderSnoozedUntil
   if (!due) return null
   return (
-    <div className="no-print mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700" role="status">
+    <div className="no-print mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-slate-200 bg-surface px-3 py-2.5 text-sm text-slate-700" role="status">
       <p className="min-w-0 flex-1">
         {settings.changesSinceBackup} changes since your last backup. Data lives only in this browser, so download a backup
         now and then.

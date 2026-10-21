@@ -100,3 +100,24 @@ describe('settlements on shared trips', () => {
     expect(await db.outbox.toArray()).toEqual([expect.objectContaining({ key: `settlements:${payment.id}`, op: 'delete' })])
   })
 })
+
+describe('payments in another currency', () => {
+  it('keeps the original amount and rate next to the trip-currency amount', async () => {
+    const { trip, me, alex } = await tripWithDinner()
+    const p = await settlementsRepo.add(trip.id, {
+      fromTravellerId: alex, toTravellerId: me, amountMinorUnits: 3000, paidOn: '2026-03-05',
+      originalAmountMinorUnits: 100000, originalCurrency: 'JPY', exchangeRate: '0.03',
+    })
+    expect(p).toMatchObject({ originalAmountMinorUnits: 100000, originalCurrency: 'JPY', exchangeRate: '0.03' })
+    const [stored] = await settlementsRepo.listByTrip(trip.id)
+    expect(stored).toMatchObject({ amountMinorUnits: 3000, originalCurrency: 'JPY' })
+  })
+
+  it('rejects incomplete or invalid currency details', async () => {
+    const { trip, me, alex } = await tripWithDinner()
+    const base = { fromTravellerId: alex, toTravellerId: me, amountMinorUnits: 3000, paidOn: '2026-03-05' }
+    await expect(settlementsRepo.add(trip.id, { ...base, originalCurrency: 'JPY' })).rejects.toThrow(/currency details/)
+    await expect(settlementsRepo.add(trip.id, { ...base, originalAmountMinorUnits: 5, originalCurrency: 'jp', exchangeRate: '0.03' })).rejects.toThrow(/currency details/)
+    expect(await settlementsRepo.listByTrip(trip.id)).toEqual([])
+  })
+})

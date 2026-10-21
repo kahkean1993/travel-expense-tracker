@@ -14,6 +14,8 @@ export interface RemoteTripRow {
   end_date: string
   base_currency: string
   budget_minor: number
+  /** Missing on databases that haven't run the latest migration. */
+  category_budgets?: Record<string, number>
   status: 'active' | 'completed'
   created_at: string
   updated_at?: string
@@ -72,6 +74,21 @@ export interface RemoteSettlementRow {
   amount_minor: number
   paid_on: string
   note: string
+  original_amount_minor?: number | null
+  original_currency?: string | null
+  exchange_rate?: string | null
+  created_at: string
+  updated_at?: string
+  created_by?: string | null
+  deleted_at?: string | null
+}
+
+export interface RemoteReceiptRow {
+  id: string
+  trip_id: string
+  expense_id: string
+  mime_type: string
+  size_bytes: number
   created_at: string
   updated_at?: string
   created_by?: string | null
@@ -114,12 +131,14 @@ export interface Invite {
   expiresAt: string
 }
 
-export type ChildTable = 'travellers' | 'expenses' | 'settlements'
+export type ChildTable = 'travellers' | 'expenses' | 'settlements' | 'receipts'
 export type ChildRow<T extends ChildTable> = T extends 'travellers'
   ? RemoteTravellerRow
   : T extends 'settlements'
     ? RemoteSettlementRow
-    : RemoteExpenseRow
+    : T extends 'receipts'
+      ? RemoteReceiptRow
+      : RemoteExpenseRow
 
 /**
  * - network: no connection or the server could not be reached; retry later.
@@ -150,6 +169,11 @@ export interface Remote {
   updateTrip(row: RemoteTripRow): Promise<void>
   upsert<T extends ChildTable>(table: T, rows: ChildRow<T>[]): Promise<void>
   softDelete(table: 'trips' | ChildTable, ids: string[]): Promise<void>
+  /** Uploads a receipt photo to private storage ("<trip id>/<receipt id>"). */
+  uploadReceipt(tripId: string, receiptId: string, blob: Blob): Promise<void>
+  downloadReceipt(tripId: string, receiptId: string): Promise<Blob>
+  /** Best effort: deleting the file of a removed receipt. */
+  removeReceiptFiles(files: { tripId: string; receiptId: string }[]): Promise<void>
   /** The newest invite link that still works, if any. */
   getActiveInvite(tripId: string): Promise<Invite | null>
   createInvite(tripId: string): Promise<Invite>

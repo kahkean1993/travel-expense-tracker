@@ -10,6 +10,8 @@ import { useBusy } from '../../components/useBusy'
 import { importMerge, importReplace, parseBackup, previewImport, type BackupFile, type ImportPreview } from '../../lib/export/backup'
 import { isValidCurrencyCode } from '../../lib/money/money'
 import type { Category } from '../../types/domain'
+import { setTheme, useTheme, type ThemeChoice } from '../../lib/theme'
+import { ChipGroup } from '../../components/ui'
 import { downloadBackup } from './backupActions'
 import { loadSampleData, removeSampleData, sampleTripIds } from './sampleData'
 import { AccountCard } from '../sharing/AccountCard'
@@ -68,7 +70,7 @@ function BackupCard({ lastBackupAt, changes }: { lastBackupAt: string | null; ch
       <SectionTitle>Back up</SectionTitle>
       <p className="text-sm text-slate-600">
         One file with all your trips and expenses. Keep it somewhere safe (a cloud drive, or email it to yourself) to restore
-        later or on another phone.
+        later or on another phone. Receipt photos are not included in the file, to keep it small.
       </p>
       <p className="mt-2 text-sm text-slate-700">
         {lastBackupAt
@@ -167,7 +169,7 @@ function RestoreCard() {
           className="sr-only"
           onChange={(e) => void onFile(e.target.files?.[0])}
         />
-        <label htmlFor="restore-file" className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-800 hover:bg-slate-50">
+        <label htmlFor="restore-file" className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-slate-300 bg-surface px-4 text-sm font-medium text-slate-800 hover:bg-slate-50">
           <IconUpload width={18} height={18} /> Choose backup file
         </label>
         {fileName ? <span className="truncate text-sm text-slate-600">{fileName}</span> : null}
@@ -282,10 +284,23 @@ function StorageCard() {
 }
 
 function PreferencesCard({ defaultCurrency }: { defaultCurrency: string }) {
+  const theme = useTheme()
   const [value, setValue] = useState(defaultCurrency)
   const valid = isValidCurrencyCode(value)
   return (
-    <Disclosure title="Preferences" hint="Default currency for new trips">
+    <Disclosure title="Preferences" hint="Appearance and default currency">
+      <div className="mb-4">
+        <ChipGroup<ThemeChoice>
+          label="Appearance"
+          value={theme}
+          onChange={setTheme}
+          options={[
+            { value: 'system', label: 'Match device' },
+            { value: 'light', label: 'Light' },
+            { value: 'dark', label: 'Dark' },
+          ]}
+        />
+      </div>
       <Field label="Default base currency for new trips" htmlFor="default-currency" error={value && !valid && value.length === 3 ? 'Unknown currency code.' : undefined}>
         <div className="max-w-xs">
           <CurrencySelect

@@ -75,7 +75,7 @@ export function App() {
 
   return (
     <div className="min-h-dvh md:flex">
-      <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-white focus:px-3 focus:py-2">
+      <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-surface focus:px-3 focus:py-2">
         Skip to content
       </a>
 
@@ -87,7 +87,7 @@ export function App() {
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="no-print sticky top-0 z-20 border-b border-slate-200/70 bg-white/90 backdrop-blur">
+        <header className="no-print sticky top-0 z-20 border-b border-slate-200/70 bg-surface/90 backdrop-blur">
           <div className="mx-auto flex h-14 max-w-5xl items-center justify-between gap-2 px-4">
             <a href={href(paths.trips())} className="flex min-w-0 items-center gap-2.5 font-semibold text-slate-900 md:invisible">
               <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent-700 text-white">

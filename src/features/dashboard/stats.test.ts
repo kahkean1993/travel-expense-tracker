@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { cumulativeSeries, dailySeries, paceInfo } from './stats'
-import type { Expense, Trip } from '../../types/domain'
+import { categoryBudgetRows, cumulativeSeries, dailySeries, paceInfo } from './stats'
+import type { Category, Expense, Trip } from '../../types/domain'
 
 const trip = (startDate: string, endDate: string) => ({ startDate, endDate }) as Trip
+const baseTrip = trip('2026-03-01', '2026-03-05')
 const spend = (date: string, baseAmountMinorUnits: number) => ({ date, baseAmountMinorUnits }) as Expense
 
 describe('dailySeries', () => {
@@ -79,6 +80,21 @@ describe('cumulativeSeries', () => {
       ['2026-03-02', 500, 2000],
       ['2026-03-03', 1200, 3000],
       ['2026-03-04', null, 4000],
+    ])
+  })
+})
+
+describe('categoryBudgetRows', () => {
+  it('compares spending with each category budget, fullest first', () => {
+    const trip = { ...baseTrip, categoryBudgets: { food: 10000, transport: 5000, gone: 0 } } as Trip
+    const e = (categoryId: string, amount: number) => ({ categoryId, baseAmountMinorUnits: amount }) as Expense
+    const rows = categoryBudgetRows(trip, [e('food', 8500), e('transport', 6000), e('other', 99999)], [
+      { id: 'food', name: 'Food' },
+      { id: 'transport', name: 'Transport' },
+    ] as Category[])
+    expect(rows.map((r) => [r.name, r.percent, r.level])).toEqual([
+      ['Transport', 120, 'over'],
+      ['Food', 85, 'warning'],
     ])
   })
 })

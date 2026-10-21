@@ -9,6 +9,8 @@ import { CurrencySelect } from '../../components/CurrencySelect'
 import { IconPlus, IconX } from '../../components/Icons'
 import { useBusy } from '../../components/useBusy'
 import { useAuth } from '../../sync/cloud'
+import { useCategories } from '../../db/hooks'
+import { Disclosure } from '../../components/ui'
 import { isValidCurrencyCode, minorToInputString, parseAmountToMinor } from '../../lib/money/money'
 import { localDateString } from '../../lib/export/csv'
 import type { Trip } from '../../types/domain'
@@ -36,6 +38,7 @@ interface Errors {
   endDate?: string
   baseCurrency?: string
   budget?: string
+  categoryBudgets?: string
   travellers?: string
   form?: string
 }
@@ -58,6 +61,11 @@ function TripForm({
   const [endDate, setEndDate] = useState(trip?.endDate ?? today)
   const [baseCurrency, setBaseCurrency] = useState(trip?.baseCurrency ?? defaultCurrency)
   const [budget, setBudget] = useState(trip ? minorToInputString(trip.budgetMinorUnits, trip.baseCurrency) : '')
+  const allCategories = useCategories()
+  const budgetCategories = (allCategories ?? []).filter((c) => c.tripId === null || c.tripId === trip?.id)
+  const [catBudgets, setCatBudgets] = useState<Record<string, string>>(() =>
+    Object.fromEntries(Object.entries(trip?.categoryBudgets ?? {}).map(([id, v]) => [id, minorToInputString(v, trip!.baseCurrency)])),
+  )
   const [travellers, setTravellers] = useState<string[]>(['Me'])
   const [newTraveller, setNewTraveller] = useState('')
   const [errors, setErrors] = useState<Errors>({})
@@ -82,6 +90,19 @@ function TripForm({
       if (parsed.ok) budgetMinor = parsed.value
       else e.budget = parsed.error
     }
+    const categoryBudgets: Record<string, number> = {}
+    if (!e.baseCurrency) {
+      for (const [id, text] of Object.entries(catBudgets)) {
+        if (text.trim() === '') continue
+        const parsed = parseAmountToMinor(text, baseCurrency, { allowZero: true })
+        if (!parsed.ok) {
+          const label = budgetCategories.find((c) => c.id === id)?.name ?? 'A category'
+          e.categoryBudgets = `${label}: ${parsed.error}`
+          break
+        }
+        if (parsed.value > 0) categoryBudgets[id] = parsed.value
+      }
+    }
     if (!trip && travellers.length === 0) e.travellers = 'Add at least one traveller.'
     if (Object.keys(e).length) return { errors: e }
     return {
@@ -92,6 +113,7 @@ function TripForm({
         endDate,
         baseCurrency,
         budgetMinorUnits: budgetMinor,
+        categoryBudgets,
       },
     }
   }
@@ -204,6 +226,29 @@ function TripForm({
               />
             </Field>
           </div>
+          <Disclosure
+            title="Budget by category (optional)"
+            hint={Object.values(catBudgets).some((v) => v.trim()) ? 'Some categories have a limit' : 'Set a limit for food, transport and so on'}
+            defaultOpen={Object.keys(trip?.categoryBudgets ?? {}).length > 0}
+          >
+            <ul className="space-y-2">
+              {budgetCategories.map((c) => (
+                <li key={c.id} className="flex items-center gap-3">
+                  <label htmlFor={`cb-${c.id}`} className="min-w-0 flex-1 truncate text-sm text-slate-700">{c.name}</label>
+                  <input
+                    id={`cb-${c.id}`}
+                    className={`${inputClass} w-32 text-right tabular`}
+                    inputMode="decimal"
+                    placeholder="No limit"
+                    value={catBudgets[c.id] ?? ''}
+                    onChange={(ev) => setCatBudgets((b) => ({ ...b, [c.id]: ev.target.value }))}
+                  />
+                </li>
+              ))}
+            </ul>
+            {errors.categoryBudgets ? <div className="mt-2"><FieldError>{errors.categoryBudgets}</FieldError></div> : null}
+            <p className="mt-2 text-xs text-slate-500">Limits are in {baseCurrency}. The Home screen shows how much of each is used.</p>
+          </Disclosure>
         </Card>
 
         {!trip ? (
@@ -261,7 +306,7 @@ function TripForm({
 
         {errors.form ? <Notice tone="danger">{errors.form}</Notice> : null}
 
-        <div className="no-print fixed inset-x-0 bottom-0 z-30 border-t border-slate-200/70 bg-white/95 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur md:static md:z-auto md:border-0 md:bg-transparent md:p-0 md:backdrop-blur-none">
+        <div className="no-print fixed inset-x-0 bottom-0 z-30 border-t border-slate-200/70 bg-surface/95 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur md:static md:z-auto md:border-0 md:bg-transparent md:p-0 md:backdrop-blur-none">
           <div className="mx-auto flex max-w-xl gap-2">
             <LinkButton to={trip ? paths.dashboard(trip.id) : paths.trips()} className="min-h-12 flex-1">
               Cancel

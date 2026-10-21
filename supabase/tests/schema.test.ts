@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { PGlite } from '@electric-sql/pglite'
 import { beforeAll, describe, expect, it } from 'vitest'
 
-const migration = ['20261021000000_shared_trips.sql', '20261022000000_join_by_name.sql', '20261023000000_settlements.sql']
+const migration = ['20261021000000_shared_trips.sql', '20261022000000_join_by_name.sql', '20261023000000_settlements.sql', '20261024000000_extras.sql']
   .map((file) => readFileSync(fileURLToPath(new URL(`../migrations/${file}`, import.meta.url)), 'utf8'))
   .join('\n')
 
@@ -26,6 +26,14 @@ const AUTH_STUB = `
     $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
   grant usage on schema auth, public to anon, authenticated;
   grant execute on all functions in schema auth to anon, authenticated;
+
+  -- Just enough of Supabase Storage for the receipt policies.
+  create schema storage;
+  create table storage.buckets (id text primary key, name text, public boolean default false, file_size_limit bigint, allowed_mime_types text[]);
+  create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text references storage.buckets (id), name text, owner uuid default auth.uid());
+  alter table storage.objects enable row level security;
+  grant usage on schema storage to anon, authenticated;
+  grant select, insert, update, delete on storage.objects to authenticated;
 `
 
 const OWNER = '00000000-0000-4000-8000-000000000001'
@@ -357,5 +365,68 @@ describe('settlements, added-by and completed trips', () => {
     // Reopening unlocks expenses again.
     await as(OWNER, `update public.trips set status = 'active' where id = '${TRIP4}'`)
     await as(MEMBER, `update public.expenses set description = 'Fine now' where id = '50000000-0000-4000-8000-000000000001'`)
+  })
+})
+
+describe('category budgets', () => {
+  const TRIP5 = '10000000-0000-4000-8000-000000000005'
+  it('stores a budget object and rejects anything else', async () => {
+    await as(OWNER, `insert into public.trips (id, name, start_date, end_date, base_currency, category_budgets)
+      values ('${TRIP5}', 'Ipoh', '2026-05-01', '2026-05-03', 'MYR', '{"cat-food": 20000}')`)
+    expect(await as(OWNER, `select category_budgets from public.trips where id = '${TRIP5}'`)).toEqual([{ category_budgets: { 'cat-food': 20000 } }])
+    await expect(as(OWNER, `update public.trips set category_budgets = '[1]'::jsonb where id = '${TRIP5}'`)).rejects.toThrow(/category_budgets/)
+  })
+})
+
+describe('receipt photos', () => {
+  const TRIP6 = '10000000-0000-4000-8000-000000000006'
+  const T6 = '20000000-0000-4000-8000-0000000000c1'
+  const E6 = '30000000-0000-4000-8000-0000000000c1'
+  const E7 = '30000000-0000-4000-8000-0000000000c2'
+  const rid = (n: number) => `50000000-0000-4000-8000-00000000000${n}`
+  const receipt = (n: number, expense = E6) =>
+    `insert into public.receipts (id, trip_id, expense_id, mime_type, size_bytes) values ('${rid(n)}', '${TRIP6}', '${expense}', 'image/jpeg', 150000) returning created_by`
+
+  it('lets members add receipts, limits them to 3 per expense and keeps them on the right trip', async () => {
+    await as(OWNER, `insert into public.trips (id, name, start_date, end_date, base_currency) values ('${TRIP6}', 'Melaka', '2026-06-01', '2026-06-03', 'MYR')`)
+    await as(OWNER, `insert into public.travellers (id, trip_id, display_name, user_id) values ('${T6}', '${TRIP6}', 'Kean', '${OWNER}')`)
+    for (const id of [E6, E7]) {
+      await as(OWNER, `insert into public.expenses (id, trip_id, description, date, original_amount_minor, original_currency, exchange_rate, base_amount_minor, base_currency, category_id, category_name, payment_method, payer_traveller_id, split_mode, shares)
+        values ('${id}', '${TRIP6}', 'Dinner', '2026-06-01', 1000, 'MYR', '1', 1000, 'MYR', 'cat-food', 'Food', 'cash', '${T6}', 'personal', '[{"travellerId":"${T6}","amount":1000}]')`)
+    }
+    expect(await as(OWNER, receipt(1))).toEqual([{ created_by: OWNER }])
+    await as(OWNER, receipt(2))
+    await as(OWNER, receipt(3))
+    await expect(as(OWNER, receipt(4))).rejects.toThrow(/at most 3/)
+    // Undoing one frees a slot.
+    await as(OWNER, `update public.receipts set deleted_at = now() where id = '${rid(3)}'`)
+    await as(OWNER, receipt(4))
+    // Wrong expense for the trip.
+    await expect(as(OWNER, `insert into public.receipts (id, trip_id, expense_id, mime_type, size_bytes)
+      values ('${rid(5)}', '${TRIP6}', '${TRIP}', 'image/jpeg', 100)`)).rejects.toThrow()
+  })
+
+  it('hides receipts from non-members and signed-out users', async () => {
+    expect(await as(STRANGER, `select count(*)::int as n from public.receipts`)).toEqual([{ n: 0 }])
+    await expect(as(null, `select * from public.receipts`)).rejects.toThrow()
+    await expect(as(STRANGER, receipt(9))).rejects.toThrow()
+  })
+
+  it('rejects oversized or odd file types', async () => {
+    await expect(as(OWNER, `insert into public.receipts (id, trip_id, expense_id, mime_type, size_bytes)
+      values ('${rid(6)}', '${TRIP6}', '${E7}', 'image/jpeg', 5000000)`)).rejects.toThrow()
+    await expect(as(OWNER, `insert into public.receipts (id, trip_id, expense_id, mime_type, size_bytes)
+      values ('${rid(7)}', '${TRIP6}', '${E7}', 'application/pdf', 1000)`)).rejects.toThrow()
+  })
+
+  it('only trip members can read or write files in the trip folder', async () => {
+    const path = `${TRIP6}/${rid(1)}`
+    await as(OWNER, `insert into storage.objects (bucket_id, name) values ('receipts', '${path}')`)
+    expect(await as(OWNER, `select count(*)::int as n from storage.objects where bucket_id = 'receipts'`)).toEqual([{ n: 1 }])
+    expect(await as(STRANGER, `select count(*)::int as n from storage.objects where bucket_id = 'receipts'`)).toEqual([{ n: 0 }])
+    await expect(as(STRANGER, `insert into storage.objects (bucket_id, name) values ('receipts', '${TRIP6}/${rid(8)}')`)).rejects.toThrow()
+    await expect(as(OWNER, `insert into storage.objects (bucket_id, name) values ('receipts', 'not-a-trip-folder/file')`)).rejects.toThrow()
+    await as(OWNER, `delete from storage.objects where name = '${path}'`)
+    expect(await as(OWNER, `select count(*)::int as n from storage.objects`)).toEqual([{ n: 0 }])
   })
 })

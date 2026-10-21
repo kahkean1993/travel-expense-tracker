@@ -65,7 +65,15 @@ The workflow derives `BASE_PATH` from the repository name automatically, so scri
 
 ## Settling up
 
-The Home screen leads with **Settle up**: the fewest transfers that settle everyone. Tap **Mark paid** on a transfer (the full amount or part of it) and balances update; **Undo** removes a payment. Tap a person to see a line-by-line statement of why they owe or get back money. When everyone is settled you can mark the trip completed, which locks its expenses (reopen to change them). **Share summary** copies or shares a plain-text summary for your group chat. Home also shows spending pace against the budget and how much is safe to spend today. The add-expense form remembers the last currency, payment method, payer and split for the trip.
+The Home screen leads with **Settle up**: the fewest transfers that settle everyone. Tap **Mark paid** on a transfer (the full amount or part of it) and balances update; **Undo** removes a payment. Tap a person to see a line-by-line statement of why they owe or get back money. When everyone is settled you can mark the trip completed, which locks its expenses (reopen to change them). **Share summary** copies or shares a plain-text summary for your group chat. Pay in another currency by picking it in the Mark paid sheet (the rate can be fetched). **Share** sends a text summary and **Image** saves or shares a picture of it; the Report page lists recorded payments and prints to PDF. After the trip ends, Home reminds you while money is still owed. Home also shows spending pace against the budget, how much is safe to spend today, and progress against any per-category budgets set on the trip. The add-expense form remembers the last currency, payment method, payer and split for the trip.
+
+## More features
+
+- **Live exchange rates.** The add-expense and Mark paid forms have a **Use today's rate** button (European Central Bank reference rates via the free Frankfurter service; only the two currency codes are sent). It only fills the field: you can edit it, and it is a market rate, so it can differ from your card's. Offline, enter the rate yourself.
+- **Repeat over days.** On a new expense, "Repeat for more days" creates one expense per day, either splitting the total (hotel nights) or charging the amount each day (a daily pass).
+- **Split by item.** For a custom split, add each item, tick who had it, and optionally add a service charge or tax percentage. Everything adds up exactly.
+- **Receipt photos.** Up to 3 photos per expense, shrunk on your phone to a few hundred KB. They stay on the device for personal trips; on shared trips they are uploaded to a private Supabase Storage bucket that only trip members can read. Photos are **not** included in the JSON backup.
+- **Dark mode.** Settings → Preferences → Appearance: match the device, light or dark.
 
 ## Shared trips
 
@@ -105,10 +113,11 @@ The security rules live in the database (Row Level Security in `supabase/migrati
 You need a free [Supabase](https://supabase.com) account. The dashboard changes from time to time, so menu names may differ slightly from these steps.
 
 1. **Create a project.** In Supabase, create a new project and choose a region near you (for Malaysia, Singapore). Save the database password somewhere safe; the app doesn't need it.
-2. **Create the tables.** Open **SQL Editor** and run these three files, in this order, each pasted whole and run once. If you ran some earlier, run only the ones you haven't.
+2. **Create the tables.** Open **SQL Editor** and run these four files, in this order, each pasted whole and run once. If you ran some earlier, run only the ones you haven't.
    1. [`supabase/migrations/20261021000000_shared_trips.sql`](supabase/migrations/20261021000000_shared_trips.sql): tables, security rules, realtime updates.
    2. [`supabase/migrations/20261022000000_join_by_name.sql`](supabase/migrations/20261022000000_join_by_name.sql): lets friends join with just a name.
    3. [`supabase/migrations/20261023000000_settlements.sql`](supabase/migrations/20261023000000_settlements.sql): recorded settlement payments, "added by" tracking, and locking of completed trips.
+   4. [`supabase/migrations/20261024000000_extras.sql`](supabase/migrations/20261024000000_extras.sql): budgets per category, payments in other currencies, and receipt photos (a private Storage bucket).
 
    Supabase's security advisor may flag the `SECURITY DEFINER` functions; they are intentional (they let invites add members) and each one checks the caller.
 3. **Allow the app's address for sign-in links.** Under **Authentication → URL Configuration**:
@@ -128,6 +137,7 @@ For local development, copy `.env.example` to `.env.local` and fill in the same 
 ### Costs and limits
 
 - Supabase's free plan comfortably covers a few people sharing trips. Free projects are **paused after about a week without activity**; restore yours from the Supabase dashboard (no data is lost). While it is paused, the app keeps working offline and syncs once the project is back.
+- Receipt photos count against the free plan's 1 GB of file storage (about 5,000 photos at the size this app produces), and viewing them counts towards the monthly bandwidth. The database limit (500 MB) is far away: expenses are about 1 KB each.
 - Your email address is visible to the other members of trips you join. Friends who join without an email show only the name they picked.
 - Anonymous sign-ins can in principle be created by anyone who finds your project's public key; they can't see or create anything (they can only join a trip with a valid invite link), but a flood of them would count against the free plan's monthly user limit. Supabase's CAPTCHA option can be enabled if that ever happens.
 
@@ -194,7 +204,7 @@ The schema lives in `src/db/schema.ts` (`DB_SCHEMA_VERSION = 2`; version 2 added
 
 ## Testing
 
-`npm test` runs 151 tests covering:
+`npm test` runs 178 tests covering:
 
 - money: precision, parsing and validation, conversion direction, half-up rounding, tiny amounts, mixed currencies, formatting
 - splitting: equal and weighted remainders, custom amount validation, personal expenses, the payer's own share, balances summing to zero, and randomised settlement checks

@@ -141,7 +141,7 @@ export function ChipGroup<T extends string>({
               className={`press inline-flex min-h-11 items-center gap-2 rounded-full border px-4 text-sm ${
                 selected
                   ? 'border-accent-700 bg-accent-700 font-semibold text-white shadow-sm'
-                  : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50'
+                  : 'border-slate-300 bg-surface text-slate-700 hover:border-slate-400 hover:bg-slate-50'
               } ${o.leading ? 'pl-1.5' : ''}`}
             >
               {o.leading}
@@ -176,7 +176,7 @@ export function EmptyState({
   art?: 'trips' | 'expenses' | 'people' | 'search'
 }) {
   return (
-    <div className="animate-enter rounded-2xl border border-slate-200/70 bg-white px-6 py-10 text-center shadow-card">
+    <div className="animate-enter rounded-2xl border border-slate-200/70 bg-surface px-6 py-10 text-center shadow-card">
       {art ? <EmptyArt kind={art} /> : null}
       <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
       {children ? <div className="mx-auto mt-1.5 max-w-sm text-sm text-slate-500">{children}</div> : null}
@@ -213,7 +213,7 @@ export function Notice({
 /** A card whose body folds away. Keeps rarely used things out of the way. */
 export function Disclosure({ title, hint, children, defaultOpen = false }: { title: string; hint?: string; children: ReactNode; defaultOpen?: boolean }) {
   return (
-    <details open={defaultOpen || undefined} className="group rounded-2xl border border-slate-200/70 bg-white shadow-card">
+    <details open={defaultOpen || undefined} className="group rounded-2xl border border-slate-200/70 bg-surface shadow-card">
       <summary className="press flex min-h-14 cursor-pointer items-center justify-between gap-3 rounded-2xl px-4 marker:content-none sm:px-5">
         <span>
           <span className="block text-[15px] font-semibold text-slate-900">{title}</span>
@@ -272,7 +272,7 @@ export function ConfirmDialog({
         e.preventDefault()
         if (!busy) onCancel()
       }}
-      className="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-0 text-slate-900 shadow-xl"
+      className="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-surface p-0 text-slate-900 shadow-xl"
       aria-labelledby={titleId}
     >
       <div className="p-5">
@@ -311,7 +311,7 @@ export function Sheet({
     <dialog
       ref={ref}
       aria-labelledby={titleId}
-      className="sheet border border-slate-200 bg-white p-0 text-slate-900 shadow-xl"
+      className="sheet border border-slate-200 bg-surface p-0 text-slate-900 shadow-xl"
       onCancel={(e) => {
         e.preventDefault()
         onClose()

@@ -86,7 +86,7 @@ function TripCard({ row: { trip, spent, count, people }, index }: { row: Row; in
     <li className="animate-enter" style={{ animationDelay: `${Math.min(index, 6) * 50}ms` }}>
       <a
         href={href(paths.dashboard(trip.id))}
-        className="press block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-card hover:shadow-md"
+        className="press block overflow-hidden rounded-2xl border border-slate-200/70 bg-surface shadow-card hover:shadow-md"
       >
         <div className={`relative flex min-h-20 items-start justify-between gap-2 overflow-hidden bg-linear-to-br ${tripCover(trip.id)} p-4 text-white`}>
           <span aria-hidden="true" className="absolute -right-8 -bottom-12 size-32 rounded-full bg-white/10" />

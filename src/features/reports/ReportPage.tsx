@@ -127,7 +127,20 @@ function Report({ data }: { data: TripData }) {
                 ))}
               </ul>
             )}
-            <p className="mt-1 text-xs text-slate-500">Suggestions only; not recorded payments.</p>
+            <p className="mt-1 text-xs text-slate-500">What is still owed after the payments recorded below.</p>
+            {data.settlements.length > 0 ? (
+              <>
+                <h3 className="mt-4 mb-1 text-sm font-semibold">Payments recorded</h3>
+                <ul className="list-disc pl-5 text-sm">
+                  {[...data.settlements].sort((a, b) => a.paidOn.localeCompare(b.paidOn)).map((p) => (
+                    <li key={p.id}>
+                      {formatDate(p.paidOn)}: {names.get(p.fromTravellerId)} paid {names.get(p.toTravellerId)} {formatMoney(p.amountMinorUnits, cur)}
+                      {p.originalCurrency && p.originalAmountMinorUnits ? ` (${formatMoney(p.originalAmountMinorUnits, p.originalCurrency)})` : ''}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
           </Card>
 
           <Card className="print:border-0 print:p-0">

@@ -10,11 +10,11 @@ import { categoryLook } from '../../components/look'
 import { formatDate, formatDateRange } from '../../lib/dates'
 import { localDateString } from '../../lib/export/csv'
 import { formatMoney } from '../../lib/money/money'
-import { EMPTY_FILTER, dailySeries, filterExpenses, recentExpenses, summariseTrip, totalsByCategory } from './stats'
+import { EMPTY_FILTER, categoryBudgetRows, dailySeries, filterExpenses, recentExpenses, summariseTrip, totalsByCategory } from './stats'
 import { ExpenseRow } from '../expenses/ExpenseRow'
 import { clearJustSaved, peekJustSaved } from '../expenses/justSaved'
 import { PaceCard } from './PaceCard'
-import { SettleUpCard } from '../splitting/SettleUp'
+import { SettleReminder, SettleUpCard } from '../splitting/SettleUp'
 import { useMyTravellerId } from '../splitting/useMyTraveller'
 
 export function DashboardPage({ tripId }: { tripId: string }) {
@@ -58,6 +58,7 @@ function Dashboard({ data }: { data: TripData }) {
       </header>
 
       <BudgetHero data={data} summary={summary} />
+      <SettleReminder data={data} today={today} />
 
       {travellers.length > 1 ? <SettleUpCard data={data} myTravellerId={myTravellerId} /> : null}
       <PaceCard data={data} today={today} />
@@ -77,6 +78,7 @@ function Dashboard({ data }: { data: TripData }) {
       ) : (
         <>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 [&>*]:min-w-0">
+            <CategoryBudgets data={data} />
             <CategoryCard data={data} />
             <DailyCard data={data} today={today} average={summary.averagePerDay} />
           </div>
@@ -323,6 +325,49 @@ function DailyCard({ data, today, average }: { data: TripData; today: string; av
         {bars.map((b) => (
           <li key={b.date}>
             {formatDate(b.date)}: {formatMoney(b.amount, cur)}
+          </li>
+        ))}
+      </ul>
+    </Card>
+  )
+}
+
+// ---------- Category budgets ----------
+
+function CategoryBudgets({ data }: { data: TripData }) {
+  const { trip, expenses, categories } = data
+  const rows = categoryBudgetRows(trip, expenses, categories)
+  if (rows.length === 0) return null
+  const cur = trip.baseCurrency
+  return (
+    <Card>
+      <SectionTitle action={<a className="rounded-lg px-2 py-1.5 text-sm font-medium text-accent-700 hover:bg-accent-50" href={href(paths.tripEdit(trip.id))}>Edit</a>}>
+        Category budgets
+      </SectionTitle>
+      <ul className="space-y-4">
+        {rows.map((r) => (
+          <li key={r.id}>
+            <div className="flex items-baseline justify-between gap-2 text-sm">
+              <span className="min-w-0 truncate font-medium text-slate-800">{r.name}</span>
+              <span className="tabular shrink-0 text-slate-600">
+                {formatMoney(r.spent, cur)} of {formatMoney(r.budget, cur)}
+              </span>
+            </div>
+            <div
+              className="mt-1.5 h-2 overflow-hidden rounded-full bg-slate-100"
+              role="img"
+              aria-label={`${r.name}: ${r.percent}% of the budget used${r.level === 'over' ? ', over budget' : ''}`}
+            >
+              <div
+                className={`h-full origin-left animate-grow-x rounded-full ${r.level === 'over' ? 'bg-rose-500' : r.level === 'warning' ? 'bg-amber-400' : 'bg-accent-600'}`}
+                style={{ width: `${Math.min(100, r.percent)}%` }}
+              />
+            </div>
+            {r.level !== 'ok' ? (
+              <p className={`mt-1 text-xs font-medium ${r.level === 'over' ? 'text-rose-800' : 'text-amber-900'}`}>
+                {r.level === 'over' ? `Over by ${formatMoney(r.spent - r.budget, cur)}` : `${Math.round(r.percent)}% used`}
+              </p>
+            ) : null}
           </li>
         ))}
       </ul>

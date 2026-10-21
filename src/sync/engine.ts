@@ -20,6 +20,8 @@ import type { OutboxEntry, SyncTable } from '../types/domain'
 import {
   expenseFromRemote,
   expenseToRemote,
+  receiptFromRemote,
+  receiptToRemote,
   settlementFromRemote,
   settlementToRemote,
   travellerFromRemote,
@@ -34,6 +36,7 @@ import {
   type JoinPick,
   type Remote,
   type RemoteExpenseRow,
+  type RemoteReceiptRow,
   type RemoteSettlementRow,
   type RemoteTravellerRow,
 } from './remote'
@@ -55,6 +58,8 @@ const PUSH_ORDER: { table: SyncTable; op: OutboxEntry['op'] }[] = [
   { table: 'travellers', op: 'upsert' },
   { table: 'expenses', op: 'upsert' },
   { table: 'settlements', op: 'upsert' },
+  { table: 'receipts', op: 'upsert' },
+  { table: 'receipts', op: 'delete' },
   { table: 'settlements', op: 'delete' },
   { table: 'expenses', op: 'delete' },
   { table: 'travellers', op: 'delete' },
@@ -177,18 +182,41 @@ export class SyncEngine {
     const ids = batch.map((e) => e.recordId)
     if (op === 'delete') {
       await this.remote.softDelete(table, ids)
+      if (table === 'receipts') {
+        // The files are not needed any more. A failure here only leaves an unused file behind.
+        await this.remote.removeReceiptFiles(batch.map((e) => ({ tripId: e.tripId, receiptId: e.recordId }))).catch(() => undefined)
+      }
       return batch
     }
     if (table === 'trips') {
       for (const entry of batch) {
         const trip = await this.db.trips.get(entry.recordId)
-        if (trip) await this.remote.updateTrip(tripToRemote(trip, trip.ownerId ?? userId))
+        if (!trip) continue
+        const row = tripToRemote(trip, trip.ownerId ?? userId)
+        try {
+          await this.remote.updateTrip(row)
+        } catch (error) {
+          // A database that hasn't run the latest migration has no category_budgets column yet.
+          if (!(error instanceof RemoteError) || error.kind !== 'rejected' || !/category_budgets/.test(error.message)) throw error
+          const { category_budgets: _unsupported, ...older } = row
+          await this.remote.updateTrip(older)
+        }
       }
       return batch
     }
     if (table === 'travellers') {
       const rows = (await this.db.travellers.bulkGet(ids)).filter((t) => !!t).map(travellerToRemote)
       if (rows.length) await this.remote.upsert('travellers', rows)
+      return batch
+    }
+    if (table === 'receipts') {
+      const rows: RemoteReceiptRow[] = []
+      for (const r of (await this.db.receipts.bulkGet(ids)).filter((x) => !!x)) {
+        // The photo goes first, so nobody sees a receipt row without a file behind it.
+        if (r.blob) await this.remote.uploadReceipt(r.tripId, r.id, r.blob)
+        rows.push(receiptToRemote(r))
+      }
+      if (rows.length) await this.remote.upsert('receipts', rows)
       return batch
     }
     if (table === 'settlements') {
@@ -246,17 +274,22 @@ export class SyncEngine {
       await this.repos.tripsRepo.removeLocalCopy(tripId)
       return
     }
-    const [travellers, expenses, settlements, members] = await Promise.all([
+    const [travellers, expenses, settlements, receipts, members] = await Promise.all([
       this.remote.fetchChanged('travellers', tripId, since),
       this.remote.fetchChanged('expenses', tripId, since),
       this.remote.fetchChanged('settlements', tripId, since),
+      this.remote.fetchChanged('receipts', tripId, since).catch((error) => {
+        // A database that hasn't run the latest migration has no receipts table yet.
+        if (error instanceof RemoteError && error.kind === 'rejected') return [] as RemoteReceiptRow[]
+        throw error
+      }),
       this.remote.fetchMembers(tripId),
     ])
 
     const db = this.db
     await db.transaction(
       'rw',
-      [db.trips, db.travellers, db.expenses, db.expenseShares, db.settlements, db.categories, db.members, db.syncCursors, db.outbox],
+      [db.trips, db.travellers, db.expenses, db.expenseShares, db.settlements, db.receipts, db.categories, db.members, db.syncCursors, db.outbox],
       async () => {
         const pending = new Set(
           (await db.outbox.where('tripId').equals(tripId).toArray()).map((e) => e.key),
@@ -297,17 +330,39 @@ export class SyncEngine {
           else await db.settlements.put(settlementFromRemote(row))
         }
 
+        for (const row of receipts as RemoteReceiptRow[]) {
+          if (pending.has(`receipts:${row.id}`)) continue
+          if (row.deleted_at) await db.receipts.delete(row.id)
+          else await db.receipts.put(receiptFromRemote(row, await db.receipts.get(row.id)))
+        }
+
         await db.members.where('tripId').equals(tripId).delete()
         await db.members.bulkPut(
           members.map((m) => ({ tripId, userId: m.user_id, role: m.role, email: m.email, joinedAt: m.joined_at })),
         )
 
-        const newest = [tripRow, ...travellers, ...expenses, ...settlements]
+        const newest = [tripRow, ...travellers, ...expenses, ...settlements, ...receipts]
           .map((r) => r.updated_at ?? '')
           .reduce((a, b) => (b > a ? b : a), cursor ?? '')
         await db.syncCursors.put({ tripId, pulledUntil: newest || null })
       },
     )
+  }
+
+  // ---------- Receipt photos ----------
+
+  /** The photo of a receipt: from this device, or downloaded (and kept) when another phone added it. */
+  async receiptBlob(receipt: { id: string; tripId: string }): Promise<Blob | null> {
+    const local = await this.db.receipts.get(receipt.id)
+    if (local?.blob) return local.blob
+    if (!this.remote.currentUserId()) return null
+    try {
+      const blob = await this.remote.downloadReceipt(receipt.tripId, receipt.id)
+      await this.repos.receiptsRepo.cacheBlob(receipt.id, blob)
+      return blob
+    } catch {
+      return null
+    }
   }
 
   // ---------- Sharing ----------
@@ -326,7 +381,14 @@ export class SyncEngine {
     if (trip.isSample) throw new Error('Sample trips cannot be shared. Create your own trip first.')
 
     try {
-      await this.remote.insertTrip(tripToRemote(trip, userId))
+      const row = tripToRemote(trip, userId)
+      try {
+        await this.remote.insertTrip(row)
+      } catch (error) {
+        if (!(error instanceof RemoteError) || error.kind !== 'rejected' || !/category_budgets/.test(error.message)) throw error
+        const { category_budgets: _unsupported, ...older } = row
+        await this.remote.insertTrip(older)
+      }
     } catch (error) {
       // An earlier attempt may have created the trip online before stopping.
       if (!(error instanceof RemoteError) || error.kind !== 'rejected') throw error
@@ -337,7 +399,7 @@ export class SyncEngine {
     // so the screen that appears next already has it.
     const invite = (await this.remote.getActiveInvite(tripId)) ?? (await this.remote.createInvite(tripId))
     const db = this.db
-    await db.transaction('rw', [db.trips, db.travellers, db.expenses, db.settlements, db.outbox], async () => {
+    await db.transaction('rw', [db.trips, db.travellers, db.expenses, db.settlements, db.receipts, db.outbox], async () => {
       const ts = new Date().toISOString()
       await db.trips.update(tripId, { syncMode: 'cloud', ownerId: userId })
       if (meTravellerId) await db.travellers.update(meTravellerId, { userId })
@@ -346,6 +408,7 @@ export class SyncEngine {
       await queueAll('travellers', await db.travellers.where('tripId').equals(tripId).primaryKeys())
       await queueAll('expenses', await db.expenses.where('tripId').equals(tripId).primaryKeys())
       await queueAll('settlements', await db.settlements.where('tripId').equals(tripId).primaryKeys())
+      await queueAll('receipts', await db.receipts.where('tripId').equals(tripId).primaryKeys())
     })
     await this.sync()
     return invite

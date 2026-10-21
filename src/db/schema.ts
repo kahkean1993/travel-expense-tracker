@@ -5,6 +5,7 @@ import type {
   Expense,
   ExpenseShare,
   OutboxEntry,
+  Receipt,
   Settlement,
   SyncCursor,
   Traveller,
@@ -22,7 +23,7 @@ import { SEED_CATEGORIES } from '../types/domain'
  * `.upgrade(tx => ...)` callback. Bump DB_SCHEMA_VERSION to match, and
  * teach src/lib/export/backup.ts to upgrade older backup files.
  */
-export const DB_SCHEMA_VERSION = 3
+export const DB_SCHEMA_VERSION = 4
 export const DB_NAME = 'travel-expense-tracker'
 
 export class TravelDb extends Dexie {
@@ -31,6 +32,7 @@ export class TravelDb extends Dexie {
   expenses!: EntityTable<Expense, 'id'>
   expenseShares!: EntityTable<ExpenseShare, 'id'>
   settlements!: EntityTable<Settlement, 'id'>
+  receipts!: EntityTable<Receipt, 'id'>
   categories!: EntityTable<Category, 'id'>
   settings!: EntityTable<AppSettings, 'id'>
   outbox!: EntityTable<OutboxEntry, 'key'>
@@ -68,6 +70,14 @@ export class TravelDb extends Dexie {
       .upgrade(async (tx) => {
         await tx.table('settings').toCollection().modify((s: AppSettings) => {
           s.schemaVersion = 3
+        })
+      })
+    // v4: receipt photos.
+    this.version(4)
+      .stores({ receipts: 'id, tripId, expenseId' })
+      .upgrade(async (tx) => {
+        await tx.table('settings').toCollection().modify((s: AppSettings) => {
+          s.schemaVersion = 4
         })
       })
     this.on('populate', (tx) => {

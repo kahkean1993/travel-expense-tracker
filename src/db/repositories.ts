@@ -7,6 +7,8 @@
  */
 import { db as defaultDb, defaultSettings, type TravelDb } from './schema'
 import { trackSave } from './saveStatus'
+import { isValidCurrencyCode, parseExchangeRate } from '../lib/money/money'
+import { MAX_RECEIPTS_PER_EXPENSE, MAX_RECEIPT_BYTES } from '../types/domain'
 import type {
   AppSettings,
   Category,
@@ -14,6 +16,7 @@ import type {
   ExpenseShare,
   ID,
   ISODate,
+  Receipt,
   Settlement,
   SyncTable,
   Traveller,
@@ -27,14 +30,25 @@ const now = () => new Date().toISOString()
 export type TripInput = Pick<
   Trip,
   'name' | 'destination' | 'startDate' | 'endDate' | 'baseCurrency' | 'budgetMinorUnits'
->
+> & { categoryBudgets?: Record<ID, number> | undefined }
 export type ExpenseRecord = Omit<Expense, 'id' | 'createdAt' | 'updatedAt'>
 export type ShareRecord = Omit<ExpenseShare, 'id' | 'expenseId' | 'tripId'>
 
 export const isCloudTrip = (trip: Trip | undefined) => trip?.syncMode === 'cloud'
 
 export const TRIP_LOCKED = 'This trip is completed. Reopen it to change expenses.'
-export type SettlementInput = Pick<Settlement, 'fromTravellerId' | 'toTravellerId' | 'amountMinorUnits' | 'paidOn'> & { note?: string }
+export type SettlementInput = Pick<Settlement, 'fromTravellerId' | 'toTravellerId' | 'amountMinorUnits' | 'paidOn'> &
+  Partial<Pick<Settlement, 'originalAmountMinorUnits' | 'originalCurrency' | 'exchangeRate'>> & { note?: string }
+
+/** The "paid in another currency" details of a payment, checked for consistency. */
+function foreignPart(input: SettlementInput): Partial<Settlement> {
+  if (input.originalAmountMinorUnits === undefined && !input.originalCurrency && !input.exchangeRate) return {}
+  const { originalAmountMinorUnits: amount, originalCurrency: currency, exchangeRate: rate } = input
+  if (!currency || !isValidCurrencyCode(currency) || !rate || !parseExchangeRate(rate).ok || !Number.isSafeInteger(amount) || (amount ?? 0) <= 0) {
+    throw new Error('The currency details of this payment are not valid.')
+  }
+  return { originalAmountMinorUnits: amount!, originalCurrency: currency, exchangeRate: rate }
+}
 
 export function createRepositories(db: TravelDb) {
   /** Records that data changed, for the backup reminder. Call inside a write transaction. */
@@ -54,6 +68,7 @@ export function createRepositories(db: TravelDb) {
     await db.expenseShares.where('tripId').equals(id).delete()
     await db.expenses.where('tripId').equals(id).delete()
     await db.settlements.where('tripId').equals(id).delete()
+    await db.receipts.where('tripId').equals(id).delete()
     await db.travellers.where('tripId').equals(id).delete()
     await db.categories.where('tripId').equals(id).delete()
     await db.members.where('tripId').equals(id).delete()
@@ -72,6 +87,7 @@ export function createRepositories(db: TravelDb) {
     db.expenses,
     db.expenseShares,
     db.settlements,
+    db.receipts,
     db.categories,
     db.members,
     db.syncCursors,
@@ -109,7 +125,8 @@ export function createRepositories(db: TravelDb) {
       return trackSave(() =>
         db.transaction('rw', [db.trips, db.travellers, db.settings], async () => {
           const ts = now()
-          const trip: Trip = { ...input, id: newId(), status: 'active', syncMode: 'local', createdAt: ts, updatedAt: ts, ...extra }
+          const { categoryBudgets, ...basics } = input
+          const trip: Trip = { ...basics, ...(categoryBudgets && Object.keys(categoryBudgets).length ? { categoryBudgets } : {}), id: newId(), status: 'active', syncMode: 'local', createdAt: ts, updatedAt: ts, ...extra }
           await db.trips.add(trip)
           const names = travellerNames.map((n) => n.trim()).filter(Boolean)
           await db.travellers.bulkAdd(
@@ -133,7 +150,11 @@ export function createRepositories(db: TravelDb) {
           if (input.baseCurrency !== trip.baseCurrency && (await db.expenses.where('tripId').equals(id).count()) > 0) {
             throw new Error('The base currency cannot change once a trip has expenses.')
           }
-          await db.trips.put({ ...trip, ...input, updatedAt: now() })
+          const { categoryBudgets, ...rest } = input
+          const next: Trip = { ...trip, ...rest, updatedAt: now() }
+          if (categoryBudgets && Object.keys(categoryBudgets).length > 0) next.categoryBudgets = categoryBudgets
+          else delete next.categoryBudgets
+          await db.trips.put(next)
           await queue(id, 'trips', id, 'upsert')
           await bumpChangeCount()
         }),
@@ -180,6 +201,51 @@ export function createRepositories(db: TravelDb) {
         db.travellers.where('tripId').equals(id).count(),
       ])
       return { expenses, travellers }
+    },
+  }
+
+  // ---------- Receipt photos ----------
+
+  const receiptsRepo = {
+    listByExpense: (expenseId: ID) => db.receipts.where('expenseId').equals(expenseId).sortBy('createdAt'),
+    listByTrip: (tripId: ID) => db.receipts.where('tripId').equals(tripId).toArray(),
+
+    /** Attaches a (already shrunk) photo to an expense. */
+    add(expenseId: ID, blob: Blob): Promise<Receipt> {
+      return trackSave(() =>
+        db.transaction('rw', [db.expenses, db.receipts, db.trips, db.outbox, db.settings], async () => {
+          const expense = await db.expenses.get(expenseId)
+          if (!expense) throw new Error('This expense no longer exists.')
+          if (!['image/jpeg', 'image/png', 'image/webp'].includes(blob.type)) throw new Error('Receipts must be JPEG, PNG or WebP photos.')
+          if (blob.size === 0 || blob.size > MAX_RECEIPT_BYTES) throw new Error('This photo is too large. Photos can be up to 2 MB.')
+          if ((await db.receipts.where('expenseId').equals(expenseId).count()) >= MAX_RECEIPTS_PER_EXPENSE) {
+            throw new Error(`An expense can have up to ${MAX_RECEIPTS_PER_EXPENSE} receipt photos.`)
+          }
+          const ts = now()
+          const receipt: Receipt = { id: newId(), tripId: expense.tripId, expenseId, mimeType: blob.type, sizeBytes: blob.size, blob, createdAt: ts, updatedAt: ts }
+          await db.receipts.add(receipt)
+          await queue(expense.tripId, 'receipts', receipt.id, 'upsert')
+          await bumpChangeCount()
+          return receipt
+        }),
+      )
+    },
+
+    remove(id: ID) {
+      return trackSave(() =>
+        db.transaction('rw', [db.receipts, db.trips, db.outbox, db.settings], async () => {
+          const r = await db.receipts.get(id)
+          if (!r) return
+          await db.receipts.delete(id)
+          await queue(r.tripId, 'receipts', id, 'delete')
+          await bumpChangeCount()
+        }),
+      )
+    },
+
+    /** Keeps a photo downloaded from the server so it opens offline next time. */
+    async cacheBlob(id: ID, blob: Blob) {
+      await db.receipts.update(id, { blob })
     },
   }
 
@@ -283,40 +349,55 @@ export function createRepositories(db: TravelDb) {
      * atomically. Shares must add up to baseAmountMinorUnits.
      */
     save(id: ID | undefined, record: ExpenseRecord, shares: ShareRecord[]): Promise<Expense> {
-      const shareTotal = shares.reduce((s, x) => s + x.allocatedBaseAmountMinorUnits, 0)
-      if (shareTotal !== record.baseAmountMinorUnits) {
-        return Promise.reject(new Error('Shares do not add up to the expense total.'))
+      return this.saveMany([{ id, record, shares }]).then((saved) => saved[0]!)
+    },
+
+    /** Saves several expenses in one transaction: either all of them are stored, or none. */
+    saveMany(items: { id?: ID | undefined; record: ExpenseRecord; shares: ShareRecord[] }[]): Promise<Expense[]> {
+      for (const { record, shares } of items) {
+        const shareTotal = shares.reduce((s, x) => s + x.allocatedBaseAmountMinorUnits, 0)
+        if (shareTotal !== record.baseAmountMinorUnits) {
+          return Promise.reject(new Error('Shares do not add up to the expense total.'))
+        }
       }
       return trackSave(() =>
         db.transaction('rw', [db.trips, db.expenses, db.expenseShares, db.outbox, db.settings], async () => {
           const ts = now()
-          if ((await db.trips.get(record.tripId))?.status === 'completed') throw new Error(TRIP_LOCKED)
-          const existing = id ? await db.expenses.get(id) : undefined
-          if (id && !existing) throw new Error('This expense no longer exists.')
-          const expense: Expense = {
-            ...record,
-            id: existing?.id ?? newId(),
-            createdAt: existing?.createdAt ?? ts,
-            updatedAt: ts,
+          const saved: Expense[] = []
+          for (const { id, record, shares } of items) {
+            if ((await db.trips.get(record.tripId))?.status === 'completed') throw new Error(TRIP_LOCKED)
+            const existing = id ? await db.expenses.get(id) : undefined
+            if (id && !existing) throw new Error('This expense no longer exists.')
+            const expense: Expense = {
+              ...record,
+              id: existing?.id ?? newId(),
+              createdAt: existing?.createdAt ?? ts,
+              updatedAt: ts,
+            }
+            await db.expenses.put(expense)
+            await db.expenseShares.where('expenseId').equals(expense.id).delete()
+            await db.expenseShares.bulkAdd(
+              shares.map((sh) => ({ ...sh, id: newId(), expenseId: expense.id, tripId: expense.tripId })),
+            )
+            await queue(expense.tripId, 'expenses', expense.id, 'upsert')
+            saved.push(expense)
           }
-          await db.expenses.put(expense)
-          await db.expenseShares.where('expenseId').equals(expense.id).delete()
-          await db.expenseShares.bulkAdd(
-            shares.map((s) => ({ ...s, id: newId(), expenseId: expense.id, tripId: expense.tripId })),
-          )
-          await queue(expense.tripId, 'expenses', expense.id, 'upsert')
-          await bumpChangeCount()
-          return expense
+          await bumpChangeCount(saved.length)
+          return saved
         }),
       )
     },
 
     delete(id: ID) {
       return trackSave(() =>
-        db.transaction('rw', [db.trips, db.expenses, db.expenseShares, db.outbox, db.settings], async () => {
+        db.transaction('rw', [db.trips, db.expenses, db.expenseShares, db.receipts, db.outbox, db.settings], async () => {
           const e = await db.expenses.get(id)
           if (!e) return
           if ((await db.trips.get(e.tripId))?.status === 'completed') throw new Error(TRIP_LOCKED)
+          for (const r of await db.receipts.where('expenseId').equals(id).toArray()) {
+            await db.receipts.delete(r.id)
+            await queue(e.tripId, 'receipts', r.id, 'delete')
+          }
           await db.expenseShares.where('expenseId').equals(id).delete()
           await db.expenses.delete(id)
           await queue(e.tripId, 'expenses', id, 'delete')
@@ -406,6 +487,7 @@ export function createRepositories(db: TravelDb) {
             amountMinorUnits: input.amountMinorUnits,
             paidOn: input.paidOn as ISODate,
             note: (input.note ?? '').trim().slice(0, 200),
+            ...foreignPart(input),
             createdAt: ts,
             updatedAt: ts,
           }
@@ -441,11 +523,11 @@ export function createRepositories(db: TravelDb) {
       }),
   }
 
-  return { settingsRepo, tripsRepo, travellersRepo, expensesRepo, categoriesRepo, settlementsRepo, outboxRepo }
+  return { settingsRepo, tripsRepo, travellersRepo, expensesRepo, categoriesRepo, settlementsRepo, receiptsRepo, outboxRepo }
 }
 
 export type Repositories = ReturnType<typeof createRepositories>
 
 /** Repositories for the app's own database. */
-export const { settingsRepo, tripsRepo, travellersRepo, expensesRepo, categoriesRepo, settlementsRepo, outboxRepo } =
+export const { settingsRepo, tripsRepo, travellersRepo, expensesRepo, categoriesRepo, settlementsRepo, receiptsRepo, outboxRepo } =
   createRepositories(defaultDb)

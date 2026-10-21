@@ -36,7 +36,7 @@ describe('schema v2 upgrade', () => {
     const v2 = new TravelDb(name)
     await v2.open()
     expect(await v2.trips.get('t1')).toMatchObject({ name: 'Old trip', syncMode: 'local' })
-    expect((await v2.settings.get('app'))?.schemaVersion).toBe(3)
+    expect((await v2.settings.get('app'))?.schemaVersion).toBe(4)
     expect(await v2.outbox.count()).toBe(0)
     await v2.delete()
   })

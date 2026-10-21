@@ -2,17 +2,20 @@ import { useState } from 'react'
 import { href, paths } from '../../app/router'
 import type { TripData } from '../../db/hooks'
 import { settlementsRepo, tripsRepo } from '../../db/repositories'
-import { Button, Card, ConfirmDialog, FieldError, Money, SectionTitle, Sheet, TextInput } from '../../components/ui'
+import { Button, Card, ConfirmDialog, FieldError, Money, Notice, SectionTitle, Sheet, TextInput } from '../../components/ui'
 import { IconArrowRight, IconCheck, IconChevronRight } from '../../components/Icons'
 import { Avatar } from '../../components/visuals'
 import { useBusy } from '../../components/useBusy'
 import { formatDate } from '../../lib/dates'
 import { localDateString } from '../../lib/export/csv'
-import { formatMoney, minorToInputString, parseAmountToMinor } from '../../lib/money/money'
+import { convertMinorUnits, currencyFractionDigits, formatMoney, minorToInputString, parseAmountToMinor, parseExchangeRate } from '../../lib/money/money'
+import { fetchLiveRate } from '../../lib/rates'
+import { CurrencySelect } from '../../components/CurrencySelect'
 import type { Settlement } from '../../types/domain'
 import type { Transfer } from './allocate'
 import { settlementFor } from './settlement'
 import { summaryText } from './summaryText'
+import { summaryImage } from './summaryImage'
 
 /** Who pays whom, with a "Mark paid" button on each transfer and a way into each person's statement. */
 export function SettleUpCard({ data, myTravellerId }: { data: TripData; myTravellerId?: string | undefined }) {
@@ -40,15 +43,41 @@ export function SettleUpCard({ data, myTravellerId }: { data: TripData; myTravel
     }
   }
 
+  async function saveImage() {
+    const blob = await summaryImage(data)
+    if (!blob) return setShared('Could not create the image.')
+    const file = new File([blob], `${trip.name.replace(/[^\w-]+/g, '-')}-settle-up.png`, { type: 'image/png' })
+    try {
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: `${trip.name} – settle up` })
+        return
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+    }
+    const url = URL.createObjectURL(file)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = file.name
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 5000)
+    setShared('Image saved.')
+  }
+
   if (!hasActivity) return null
 
   return (
     <Card>
       <SectionTitle
         action={
-          <button type="button" onClick={() => void share()} className="press min-h-9 rounded-lg px-2.5 text-sm font-medium text-accent-700 hover:bg-accent-50">
-            Share summary
-          </button>
+          <span className="-mr-2 flex">
+            <button type="button" onClick={() => void share()} aria-label="Share summary as text" className="press min-h-9 rounded-lg px-2.5 text-sm font-medium text-accent-700 hover:bg-accent-50">
+              Share
+            </button>
+            <button type="button" onClick={() => void saveImage()} aria-label="Save summary as an image" className="press min-h-9 rounded-lg px-2.5 text-sm font-medium text-accent-700 hover:bg-accent-50">
+              Image
+            </button>
+          </span>
         }
       >
         Settle up
@@ -61,7 +90,7 @@ export function SettleUpCard({ data, myTravellerId }: { data: TripData; myTravel
           <p className="flex items-center gap-2 font-semibold">
             <IconCheck width={18} height={18} /> All settled
           </p>
-          <p className="mt-0.5 text-accent-800/90">Everyone has paid what they owe. Nothing left to transfer.</p>
+          <p className="mt-0.5 text-accent-800">Everyone has paid what they owe. Nothing left to transfer.</p>
           {trip.status === 'active' ? <CompleteTrip tripId={trip.id} /> : null}
         </div>
       ) : (
@@ -167,25 +196,77 @@ function MarkPaidSheet({ data, transfer, onClose }: { data: TripData; transfer: 
 function MarkPaidForm({ data, transfer, onDone }: { data: TripData; transfer: Transfer; onDone: () => void }) {
   const cur = data.trip.baseCurrency
   const { names } = settlementFor(data)
+  const [currency, setCurrency] = useState(cur)
+  const [rate, setRate] = useState('1')
   const [amount, setAmount] = useState(minorToInputString(transfer.amount, cur))
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [rateNote, setRateNote] = useState<string | null>(null)
   const [busy, run] = useBusy()
+  const foreign = currency !== cur
+
+  /** What the amount typed means in the trip currency (null while it can't be worked out). */
+  function worked(): { base: number; original: number } | { error: string } {
+    const typed = parseAmountToMinor(amount, currency)
+    if (!typed.ok) return { error: typed.error }
+    if (!foreign) return { base: typed.value, original: typed.value }
+    const parsedRate = parseExchangeRate(rate)
+    if (!parsedRate.ok) return { error: parsedRate.error }
+    try {
+      const converted = convertMinorUnits(typed.value, currency, cur, parsedRate.value)
+      // One unit of rounding in the foreign currency is not worth leaving a sliver owed.
+      const tolerance = Math.max(1, convertMinorUnits(1, currency, cur, parsedRate.value) + 1)
+      const base = Math.abs(converted - transfer.amount) <= tolerance ? transfer.amount : converted
+      return { base, original: typed.value }
+    } catch {
+      return { error: 'That amount is too large to convert.' }
+    }
+  }
+
+  const result = worked()
+  const base = 'base' in result ? result.base : null
+
+  function changeCurrency(code: string) {
+    setCurrency(code)
+    setRateNote(null)
+    setError(null)
+    if (code === cur) {
+      setRate('1')
+      setAmount(minorToInputString(transfer.amount, cur))
+    } else {
+      setRate('')
+      setAmount('')
+    }
+  }
+
+  async function lookUp() {
+    const found = await fetchLiveRate(currency, cur)
+    if (!found.ok) return setRateNote(found.error)
+    setRate(found.value.rate)
+    setRateNote(`Rate from ${found.value.date || 'today'} (market rate).`)
+    // Suggest paying the full amount in this currency; only a suggestion, the saved conversion is exact.
+    const owedMajor = transfer.amount / 10 ** currencyFractionDigits(cur)
+    const suggestion = owedMajor / Number(found.value.rate)
+    setAmount(suggestion.toFixed(currencyFractionDigits(currency)))
+  }
 
   function submit(e: React.FormEvent) {
     e.preventDefault()
-    const parsed = parseAmountToMinor(amount, cur)
-    if (!parsed.ok) return setError(parsed.error)
-    if (parsed.value > transfer.amount) return setError(`That is more than the ${formatMoney(transfer.amount, cur)} owed.`)
+    if ('error' in result) return setError(result.error)
+    if (result.base > transfer.amount) return setError(`That is more than the ${formatMoney(transfer.amount, cur)} owed.`)
+    if (result.base <= 0) return setError('Amount must be greater than zero.')
+    const parsedRate = parseExchangeRate(rate)
+    const foreignRate = parsedRate.ok ? parsedRate.value : '1'
     setError(null)
     void run(async () => {
       try {
         await settlementsRepo.add(data.trip.id, {
           fromTravellerId: transfer.fromTravellerId,
           toTravellerId: transfer.toTravellerId,
-          amountMinorUnits: parsed.value,
+          amountMinorUnits: result.base,
           paidOn: localDateString(),
           note,
+          ...(foreign ? { originalAmountMinorUnits: result.original, originalCurrency: currency, exchangeRate: foreignRate } : {}),
         })
         onDone()
       } catch (err) {
@@ -198,12 +279,29 @@ function MarkPaidForm({ data, transfer, onDone }: { data: TripData; transfer: Tr
     <form onSubmit={submit} noValidate className="space-y-4">
       <p className="text-sm text-slate-600">
         <span className="font-semibold text-slate-900">{names.get(transfer.fromTravellerId)}</span> paid{' '}
-        <span className="font-semibold text-slate-900">{names.get(transfer.toTravellerId)}</span>. Change the amount if it was only part of it.
+        <span className="font-semibold text-slate-900">{names.get(transfer.toTravellerId)}</span>. Owed: {formatMoney(transfer.amount, cur)}. Change the amount if it was only part of it.
       </p>
-      <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700">
-        Amount paid ({cur})
-        <TextInput inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} aria-invalid={error ? true : undefined} />
-      </label>
+      <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+        <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700">
+          Amount paid ({currency})
+          <TextInput inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} aria-invalid={error ? true : undefined} />
+        </label>
+        <div className="w-28">
+          <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="paid-currency">Paid in</label>
+          <CurrencySelect id="paid-currency" value={currency} onChange={changeCurrency} extra={[...new Set([cur, ...data.expenses.map((e) => e.originalCurrency)])]} />
+        </div>
+      </div>
+      {foreign ? (
+        <div className="rounded-xl bg-slate-50 p-3">
+          <label htmlFor="paid-rate" className="text-sm font-medium text-slate-700">Exchange rate (1 {currency} = {cur})</label>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <TextInput id="paid-rate" className="w-36" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="e.g. 0.0312" />
+            <Button className="min-h-9 px-3" onClick={() => void lookUp()}>Use today's rate</Button>
+          </div>
+          {rateNote ? <p role="status" className="mt-1.5 text-xs text-slate-600">{rateNote}</p> : null}
+          {base !== null ? <p className="mt-2 text-sm text-slate-700">Counts as <span className="font-semibold">{formatMoney(base, cur)}</span> towards what is owed.</p> : null}
+        </div>
+      ) : null}
       <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700">
         Note (optional)
         <TextInput value={note} onChange={(e) => setNote(e.target.value)} maxLength={200} placeholder="e.g. bank transfer" />
@@ -236,6 +334,7 @@ export function PaymentHistory({ data }: { data: TripData }) {
               <span className="font-medium text-slate-900">{names.get(p.toTravellerId)}</span>
               <span className="block text-xs text-slate-500">
                 {formatDate(p.paidOn)}
+                {p.originalCurrency && p.originalAmountMinorUnits ? ` · paid ${formatMoney(p.originalAmountMinorUnits, p.originalCurrency)} at ${p.exchangeRate}` : ''}
                 {p.note ? ` · ${p.note}` : ''}
               </span>
             </span>
@@ -267,5 +366,19 @@ function UndoDialog({ payment, busy, data, onCancel, onConfirm }: { payment: Set
         </>
       ) : null}
     </ConfirmDialog>
+  )
+}
+
+/** A nudge on Home once the trip has ended but money is still owed. */
+export function SettleReminder({ data, today }: { data: TripData; today: string }) {
+  const { trip } = data
+  if (trip.status !== 'active' || today <= trip.endDate) return null
+  const { transfers } = settlementFor(data)
+  if (transfers.length === 0) return null
+  const days = Math.round((Date.parse(today) - Date.parse(trip.endDate)) / 86_400_000)
+  return (
+    <Notice tone="warning">
+      The trip ended {days === 1 ? 'yesterday' : `${days} days ago`}, and {transfers.length} payment{transfers.length === 1 ? ' is' : 's are'} still owed. Settle up below.
+    </Notice>
   )
 }

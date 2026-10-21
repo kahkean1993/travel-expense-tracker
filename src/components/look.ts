@@ -36,7 +36,7 @@ const BUILT_IN: Record<string, CategoryLook> = {
   'cat-insurance': { Icon: IconShield, tint: 'bg-emerald-100 text-emerald-700', bar: 'bg-emerald-400' },
   'cat-sim': { Icon: IconWifi, tint: 'bg-cyan-100 text-cyan-700', bar: 'bg-cyan-400' },
   'cat-health': { Icon: IconHeart, tint: 'bg-rose-100 text-rose-700', bar: 'bg-rose-400' },
-  'cat-misc': { Icon: IconDots, tint: 'bg-stone-200 text-stone-700', bar: 'bg-stone-400' },
+  'cat-misc': { Icon: IconDots, tint: 'bg-slate-200 text-slate-700', bar: 'bg-stone-400' },
 }
 
 const CUSTOM: Omit<CategoryLook, 'Icon'>[] = [
