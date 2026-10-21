@@ -261,11 +261,15 @@ function TripForm({
 
         {errors.form ? <Notice tone="danger">{errors.form}</Notice> : null}
 
-        <div className="flex flex-wrap justify-end gap-2">
-          <LinkButton to={trip ? paths.dashboard(trip.id) : paths.trips()}>Cancel</LinkButton>
-          <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? 'Saving…' : trip ? 'Save changes' : 'Create trip'}
-          </Button>
+        <div className="no-print fixed inset-x-0 bottom-0 z-30 border-t border-slate-200/70 bg-white/95 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur md:static md:z-auto md:border-0 md:bg-transparent md:p-0 md:backdrop-blur-none">
+          <div className="mx-auto flex max-w-xl gap-2">
+            <LinkButton to={trip ? paths.dashboard(trip.id) : paths.trips()} className="min-h-12 flex-1">
+              Cancel
+            </LinkButton>
+            <Button type="submit" variant="primary" disabled={busy} className="min-h-12 flex-[1.4]">
+              {busy ? 'Saving…' : trip ? 'Save changes' : 'Create trip'}
+            </Button>
+          </div>
         </div>
       </form>
 

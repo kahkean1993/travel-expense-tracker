@@ -17,6 +17,7 @@ import {
 } from '../../sync/cloud'
 import type { Invite } from '../../sync/remote'
 import { describeError } from './errors'
+import { Avatar } from '../../components/visuals'
 import { SignInForm } from './SignInForm'
 
 const isPlaceholderName = (name: string) => /^me$/i.test(name.trim())
@@ -239,6 +240,7 @@ function SharedTrip({ data, userId, anonymous }: { data: TripData; userId: strin
           <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
             {members.map((m) => (
               <li key={m.userId} className="flex min-h-11 items-center gap-2 px-3 py-1.5">
+                <Avatar name={memberLabel(m)} size="sm" />
                 <span className="min-w-0 flex-1 truncate">
                   {memberLabel(m)}
                   {m.userId === userId ? <span className="text-slate-500"> (you)</span> : null}

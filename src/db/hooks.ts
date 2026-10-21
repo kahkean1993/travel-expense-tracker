@@ -28,14 +28,23 @@ export function useTripData(tripId: ID): TripData | null | undefined {
 
 export function useTrips() {
   return useLiveQuery(async () => {
-    const [trips, expenses] = await Promise.all([tripsRepo.list(), expensesRepo.listAll()])
+    const [trips, expenses, travellers] = await Promise.all([tripsRepo.list(), expensesRepo.listAll(), travellersRepo.listAll()])
+    const names = new Map<ID, string[]>()
+    for (const t of [...travellers].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))) {
+      names.set(t.tripId, [...(names.get(t.tripId) ?? []), t.displayName])
+    }
     const spent = new Map<ID, number>()
     const counts = new Map<ID, number>()
     for (const e of expenses) {
       spent.set(e.tripId, (spent.get(e.tripId) ?? 0) + e.baseAmountMinorUnits)
       counts.set(e.tripId, (counts.get(e.tripId) ?? 0) + 1)
     }
-    return trips.map((trip) => ({ trip, spent: spent.get(trip.id) ?? 0, count: counts.get(trip.id) ?? 0 }))
+    return trips.map((trip) => ({
+      trip,
+      spent: spent.get(trip.id) ?? 0,
+      count: counts.get(trip.id) ?? 0,
+      people: names.get(trip.id) ?? [],
+    }))
   })
 }
 

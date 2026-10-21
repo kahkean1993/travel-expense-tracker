@@ -65,6 +65,16 @@ export const paths = {
 
 export const href = (path: string) => `#${path}`
 
+/** Changes whenever the visible screen changes, so screens can animate in. */
+export function routeKey(route: Route): string {
+  const parts: string[] = [route.name]
+  if ('tripId' in route) parts.push(route.tripId)
+  if ('expenseId' in route) parts.push(route.expenseId)
+  if ('duplicateOf' in route && route.duplicateOf) parts.push(route.duplicateOf)
+  if ('token' in route) parts.push(route.token)
+  return parts.join(':')
+}
+
 export function navigate(path: string, options: { replace?: boolean } = {}) {
   if (options.replace) {
     history.replaceState(null, '', href(path))

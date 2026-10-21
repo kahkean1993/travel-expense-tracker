@@ -179,6 +179,7 @@ export function createRepositories(db: TravelDb) {
   // ---------- Travellers ----------
 
   const travellersRepo = {
+    listAll: () => db.travellers.toArray(),
     listByTrip: async (tripId: ID) =>
       (await db.travellers.where('tripId').equals(tripId).toArray()).sort(
         (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),

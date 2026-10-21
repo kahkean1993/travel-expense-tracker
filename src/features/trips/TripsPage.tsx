@@ -1,11 +1,20 @@
 import { useTrips } from '../../db/hooks'
 import { href, paths } from '../../app/router'
 import { EmptyState, LinkButton, Loading, Money, PageHeader } from '../../components/ui'
+import { IconPlus } from '../../components/Icons'
+import { AvatarStack } from '../../components/visuals'
+import { tripCover } from '../../components/look'
 import { formatDateRange } from '../../lib/dates'
-import { IconChevronRight, IconPlus } from '../../components/Icons'
 import { percentUsed } from '../../lib/money/money'
 import { cloudConfigured } from '../../sync/cloud'
 import type { Trip } from '../../types/domain'
+
+interface Row {
+  trip: Trip
+  spent: number
+  count: number
+  people: string[]
+}
 
 export function TripsPage() {
   const rows = useTrips()
@@ -19,7 +28,7 @@ export function TripsPage() {
     <div>
       <PageHeader
         title="Trips"
-        subtitle={cloudConfigured ? 'Trips are on this device unless you share them.' : 'Saved in this browser on this device only.'}
+        subtitle={cloudConfigured ? 'On this device unless shared' : 'Saved on this device'}
         actions={
           rows.length ? (
             <LinkButton to={paths.tripNew()} variant="primary">
@@ -30,7 +39,8 @@ export function TripsPage() {
       />
       {rows.length === 0 ? (
         <EmptyState
-          title="No trips yet"
+          art="trips"
+          title="Where are you off to?"
           action={
             <div className="flex flex-wrap justify-center gap-2">
               <LinkButton to={paths.tripNew()} variant="primary">
@@ -40,11 +50,10 @@ export function TripsPage() {
             </div>
           }
         >
-          Create a trip with a budget and base currency, then record expenses as you go. You can also load sample data
-          from Settings to explore.
+          Set a budget, add your travel companions and log expenses as you go. Try the sample trip from Settings to look around first.
         </EmptyState>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-7">
           <TripList title="Active" rows={active} empty="No active trips." />
           {completed.length ? <TripList title="Completed" rows={completed} /> : null}
         </div>
@@ -53,42 +62,70 @@ export function TripsPage() {
   )
 }
 
-function TripList({ title, rows, empty }: { title: string; rows: { trip: Trip; spent: number; count: number }[]; empty?: string }) {
+function TripList({ title, rows, empty }: { title: string; rows: Row[]; empty?: string }) {
   return (
-    <section>
-      <h2 className="mb-2 text-sm font-semibold tracking-wide text-slate-500 uppercase">{title}</h2>
+    <section aria-label={title}>
+      <h2 className="mb-2.5 text-xs font-semibold tracking-wider text-slate-500 uppercase">{title}</h2>
       {rows.length === 0 ? (
-        <p className="text-sm text-slate-600">{empty}</p>
+        <p className="text-sm text-slate-500">{empty}</p>
       ) : (
-        <ul className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
-          {rows.map(({ trip, spent, count }) => {
-            const pct = percentUsed(spent, trip.budgetMinorUnits)
-            return (
-              <li key={trip.id}>
-                <a href={href(paths.dashboard(trip.id))} className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium text-slate-900">
-                      {trip.name}
-                      {trip.isSample ? <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs font-normal text-slate-600">Sample</span> : null}
-                      {trip.syncMode === 'cloud' ? <span className="ml-2 rounded bg-accent-50 px-1.5 py-0.5 text-xs font-normal text-accent-800">Shared</span> : null}
-                    </p>
-                    <p className="truncate text-sm text-slate-600">
-                      {[trip.destination, formatDateRange(trip.startDate, trip.endDate)].filter(Boolean).join(' · ')}
-                    </p>
-                  </div>
-                  <div className="text-right text-sm">
-                    <Money minor={spent} currency={trip.baseCurrency} className="font-medium text-slate-900" />
-                    <p className="text-xs text-slate-500">
-                      {pct === null ? `${count} expense${count === 1 ? '' : 's'}` : `${pct}% of budget`}
-                    </p>
-                  </div>
-                  <IconChevronRight className="shrink-0 text-slate-400" />
-                </a>
-              </li>
-            )
-          })}
+        <ul className="grid gap-4 sm:grid-cols-2">
+          {rows.map((row, i) => (
+            <TripCard key={row.trip.id} row={row} index={i} />
+          ))}
         </ul>
       )}
     </section>
   )
+}
+
+function TripCard({ row: { trip, spent, count, people }, index }: { row: Row; index: number }) {
+  const pct = percentUsed(spent, trip.budgetMinorUnits)
+  const tone = pct === null ? 'bg-accent-600' : pct >= 100 ? 'bg-rose-500' : pct >= 80 ? 'bg-amber-500' : 'bg-accent-600'
+  return (
+    <li className="animate-enter" style={{ animationDelay: `${Math.min(index, 6) * 50}ms` }}>
+      <a
+        href={href(paths.dashboard(trip.id))}
+        className="press block overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-card hover:shadow-md"
+      >
+        <div className={`relative flex min-h-20 items-start justify-between gap-2 overflow-hidden bg-linear-to-br ${tripCover(trip.id)} p-4 text-white`}>
+          <span aria-hidden="true" className="absolute -right-8 -bottom-12 size-32 rounded-full bg-white/10" />
+          <p className="relative min-w-0 text-sm font-medium text-white/90">
+            {trip.destination || 'Trip'}
+            <span className="block text-xs text-white/80">{formatDateRange(trip.startDate, trip.endDate)}</span>
+          </p>
+          <span className="relative flex shrink-0 gap-1.5">
+            {trip.syncMode === 'cloud' ? <Pill>Shared</Pill> : null}
+            {trip.isSample ? <Pill>Sample</Pill> : null}
+          </span>
+        </div>
+        <div className="space-y-3 p-4">
+          <p className="truncate text-lg font-semibold text-slate-900">{trip.name}</p>
+          <div>
+            <div className="flex items-baseline justify-between gap-2 text-sm">
+              <Money minor={spent} currency={trip.baseCurrency} className="text-base font-semibold text-slate-900" />
+              <span className="text-slate-500">
+                {trip.budgetMinorUnits > 0 ? <>of <Money minor={trip.budgetMinorUnits} currency={trip.baseCurrency} /></> : 'No budget'}
+              </span>
+            </div>
+            {pct !== null ? (
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100" role="img" aria-label={`${pct}% of the budget used`}>
+                <div className={`h-full origin-left animate-grow-x rounded-full ${tone}`} style={{ width: `${Math.min(100, pct)}%` }} />
+              </div>
+            ) : null}
+          </div>
+          <div className="flex items-center justify-between text-sm text-slate-500">
+            <AvatarStack names={people} />
+            <span>
+              {count} expense{count === 1 ? '' : 's'}
+            </span>
+          </div>
+        </div>
+      </a>
+    </li>
+  )
+}
+
+function Pill({ children }: { children: React.ReactNode }) {
+  return <span className="rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-semibold text-white">{children}</span>
 }

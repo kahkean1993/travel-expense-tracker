@@ -17,6 +17,7 @@ A mobile-first web app for recording trip spending, tracking a budget, splitting
 - **Exports**: an Excel-compatible CSV (UTF-8 BOM, CRLF, RFC 4180 quoting, formula-injection guard) and a full JSON backup. Restoring a backup validates it, previews it, and then lets you either *add new trips* (merge) or *replace all data*.
 - **Resilience**: a "Saving… / Saved" indicator that only says Saved after the write succeeds. Write failures show a visible error with recovery advice. Double taps can't create duplicate saves. After 20 changes, a gentle reminder suggests making a backup. On supported browsers you can ask the browser to protect stored data from automatic clearing.
 - **Offline / PWA**: the app shell is precached by a service worker. After the first load you can open the app, view expenses and add expenses with no connection. An "Offline" badge appears when you're disconnected. When a new version is deployed, a banner offers to reload; the app never reloads by itself mid-entry.
+- **Look and feel**: a calm teal palette, colour-coded category icons, a budget card with a progress ring, and a bottom bar with one raised **Add** button (the less-used pages live under **More**). Subtle motion: totals count up, lists and screens fade in, bars fill, buttons respond to taps. All motion switches off when the phone's "reduce motion" setting is on. The screens pass an automated accessibility scan (axe, no violations) at phone and desktop widths.
 - **Sample data**: Settings → Load sample data creates a fictional trip marked "Sample". You can remove it in one tap without touching your own trips.
 
 ## Getting started
@@ -146,7 +147,7 @@ For local development, copy `.env.example` to `.env.local` and fill in the same 
 ```
 src/
   app/            App shell, navigation, hash router
-  components/     Reusable UI (buttons, fields, dialogs, icons, status indicators)
+  components/     Reusable UI (buttons, fields, dialogs, icons, status indicators), visual language (look.ts, visuals.tsx)
   db/             Dexie schema + migrations note, repositories (data access layer), live-query hooks, save status
   features/
     trips/        Trip list and form
@@ -188,7 +189,7 @@ The schema lives in `src/db/schema.ts` (`DB_SCHEMA_VERSION = 2`; version 2 added
 
 ## Testing
 
-`npm test` runs 109 tests covering:
+`npm test` runs 113 tests covering:
 
 - money: precision, parsing and validation, conversion direction, half-up rounding, tiny amounts, mixed currencies, formatting
 - splitting: equal and weighted remainders, custom amount validation, personal expenses, the payer's own share, balances summing to zero, and randomised settlement checks

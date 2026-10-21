@@ -69,6 +69,46 @@ export function totalsByDay(expenses: Expense[]): TotalRow[] {
   return [...map.values()].sort((a, b) => a.key.localeCompare(b.key))
 }
 
+export interface DayBar {
+  date: ISODate
+  amount: number
+  isToday: boolean
+  isFuture: boolean
+}
+
+const addDays = (date: ISODate, days: number): ISODate => new Date(Date.parse(date) + days * DAY_MS).toISOString().slice(0, 10)
+
+/**
+ * One bar per trip day for the daily chart. Long trips show only the last
+ * `maxDays` days up to today (or the first `maxDays` if the trip hasn't
+ * started). Expenses dated outside the trip's own days are still shown.
+ */
+export function dailySeries(trip: Trip, expenses: Expense[], today: ISODate, maxDays = 14): DayBar[] {
+  const dates = expenses.map((e) => e.date)
+  const first = [trip.startDate, ...dates].reduce((a, b) => (b < a ? b : a))
+  const last = [trip.endDate, ...dates].reduce((a, b) => (b > a ? b : a))
+  let start = first
+  let end = last
+  if (daysBetweenInclusive(first, last) > maxDays) {
+    if (today < first) end = addDays(first, maxDays - 1)
+    else {
+      end = today < last ? today : last
+      start = addDays(end, -(maxDays - 1))
+      if (start < first) {
+        start = first
+        end = addDays(first, maxDays - 1)
+      }
+    }
+  }
+  const totals = new Map<ISODate, number>()
+  for (const e of expenses) totals.set(e.date, (totals.get(e.date) ?? 0) + e.baseAmountMinorUnits)
+  const bars: DayBar[] = []
+  for (let d = start; d <= end; d = addDays(d, 1)) {
+    bars.push({ date: d, amount: totals.get(d) ?? 0, isToday: d === today, isFuture: d > today })
+  }
+  return bars
+}
+
 export function recentExpenses(expenses: Expense[], limit = 5): Expense[] {
   return [...expenses]
     .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))

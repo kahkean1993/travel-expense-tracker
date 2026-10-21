@@ -13,6 +13,8 @@ import {
 import type { InvitePreview } from '../../sync/remote'
 import { describeError } from './errors'
 import { SignInForm } from './SignInForm'
+import { Avatar } from '../../components/visuals'
+import { tripCover } from '../../components/look'
 
 const NEW_NAME = '__new__'
 
@@ -106,15 +108,16 @@ function JoinCard({
   }
 
   return (
-    <Card className="space-y-4">
-      <div>
-        <p className="text-sm text-slate-600">You're invited to</p>
-        <p className="text-xl font-semibold break-words">{preview.tripName}</p>
-        <p className="text-sm text-slate-600">
-          {preview.memberCount} {preview.memberCount === 1 ? 'person is' : 'people are'} on this trip. You'll see and add expenses
-          together.
+    <Card className="overflow-hidden p-0 sm:p-0">
+      <div className={`relative overflow-hidden bg-linear-to-br ${tripCover(preview.tripId)} p-5 text-white`}>
+        <span aria-hidden="true" className="pointer-events-none absolute -top-10 -right-8 size-36 rounded-full bg-white/10" />
+        <p className="relative text-sm text-white/85">You're invited to</p>
+        <p className="relative mt-1 text-2xl font-semibold break-words">{preview.tripName}</p>
+        <p className="relative mt-1 text-sm text-white/85">
+          {preview.memberCount} {preview.memberCount === 1 ? 'person is' : 'people are'} on this trip. You'll add expenses together.
         </p>
       </div>
+      <div className="space-y-4 p-5">
 
       {preview.alreadyMember ? (
         <p className="text-sm text-slate-700">You're already on this trip.</p>
@@ -123,7 +126,10 @@ function JoinCard({
           {choices.length > 0 ? (
             <ChipGroup
               label="Who are you?"
-              options={[...choices.map((t) => ({ value: t.id, label: t.name })), { value: NEW_NAME, label: "I'm not on the list" }]}
+              options={[
+                ...choices.map((t) => ({ value: t.id, label: t.name, leading: <Avatar name={t.name} size="sm" /> })),
+                { value: NEW_NAME, label: "I'm not on the list" },
+              ]}
               value={choice}
               onChange={setChoice}
             />
@@ -165,6 +171,7 @@ function JoinCard({
           )}
         </div>
       ) : null}
+      </div>
     </Card>
   )
 }

@@ -1,29 +1,165 @@
 @import "tailwindcss";
 
+/*
+ * Design tokens.
+ * The neutral "slate" scale is redefined with a faint green tint, so every
+ * existing slate-* class picks up the calmer palette. All text colours below
+ * were checked for WCAG AA contrast on white and on the page background.
+ */
 @theme {
-  --color-accent-50: #f0fdfa;
-  --color-accent-100: #ccfbf1;
-  --color-accent-600: #0d9488;
+  --color-slate-50: #f6f7f4;
+  --color-slate-100: #eef0ec;
+  --color-slate-200: #e1e5e0;
+  --color-slate-300: #cdd3cd;
+  --color-slate-400: #69766f;
+  --color-slate-500: #5e6b65;
+  --color-slate-600: #47534e;
+  --color-slate-700: #33403b;
+  --color-slate-800: #232d2a;
+  --color-slate-900: #121b18;
+
+  --color-accent-50: #e8f5f2;
+  --color-accent-100: #cfeae4;
+  --color-accent-600: #0e857a;
   --color-accent-700: #0f766e;
   --color-accent-800: #115e59;
+  --color-accent-900: #0c4a46;
+
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  --shadow-card: 0 1px 2px rgb(18 27 24 / 0.04), 0 8px 24px -12px rgb(18 27 24 / 0.12);
+  --shadow-raised: 0 2px 4px rgb(18 27 24 / 0.08), 0 12px 28px -8px rgb(15 118 110 / 0.45);
+
+  --ease-out-expo: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Note: use fill-mode "backwards", not "both". Keeping a transform applied after the animation ends
+     would make the element the containing block of position:fixed children (the bottom bars). */
+  --animate-enter: enter 380ms var(--ease-out-expo) backwards;
+  --animate-fade: fade 220ms ease-out backwards;
+  --animate-pop: pop 300ms var(--ease-out-expo) backwards;
+  --animate-sheet: sheet 340ms var(--ease-out-expo) backwards;
+  --animate-flash: flash 1800ms ease-out 1 both;
+  --animate-shimmer: shimmer 1.5s linear infinite;
+  --animate-grow-x: grow-x 700ms var(--ease-out-expo) backwards;
+  --animate-grow-y: grow-y 700ms var(--ease-out-expo) backwards;
+}
+
+/* Motion: small, purposeful and only transform/opacity. */
+@keyframes enter {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pop {
+  from { opacity: 0; transform: scale(0.94); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes sheet {
+  from { opacity: 0; transform: translateY(32px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes flash {
+  0% { background-color: var(--color-accent-100); }
+  100% { background-color: transparent; }
+}
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+@keyframes grow-x {
+  from { transform: scaleX(0); }
+  to { transform: none; }
+}
+@keyframes grow-y {
+  from { transform: scaleY(0); }
+  to { transform: none; }
+}
+
+/* Tactile press feedback for tappable things. */
+@utility press {
+  transition-property: transform, background-color, border-color, box-shadow, color;
+  transition-duration: 140ms;
+  transition-timing-function: ease-out;
+  &:active {
+    transform: scale(0.97);
+  }
 }
 
 html {
   -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Leave room for the sticky top bar and the fixed bottom bars when something is scrolled into view. */
+  scroll-padding-top: 4.5rem;
+  scroll-padding-bottom: 8rem;
 }
 body {
   @apply bg-slate-50 text-slate-900 antialiased;
+  line-height: 1.5;
+}
+h1, h2, h3 {
+  text-wrap: balance;
+}
+p, li {
+  text-wrap: pretty;
 }
 :focus-visible {
   outline: 2px solid var(--color-accent-700);
   outline-offset: 2px;
 }
-dialog::backdrop {
-  background: rgb(15 23 42 / 0.45);
-}
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/* Dialogs: centred card by default, bottom sheet with the "sheet" class. */
+dialog {
+  color: inherit;
+}
+dialog[open] {
+  animation: var(--animate-pop);
+}
+dialog::backdrop {
+  background: rgb(18 27 24 / 0.45);
+  animation: var(--animate-fade);
+}
+dialog.sheet {
+  margin: auto 0 0 0;
+  max-width: none;
+  width: 100%;
+  border-radius: 1.5rem 1.5rem 0 0;
+}
+dialog.sheet[open] {
+  animation: var(--animate-sheet);
+}
+@media (min-width: 768px) {
+  dialog.sheet {
+    margin: auto;
+    max-width: 26rem;
+    border-radius: 1.5rem;
+  }
+}
+
+/* Loading placeholder */
+.skeleton {
+  background: linear-gradient(90deg, var(--color-slate-100) 25%, var(--color-slate-200) 37%, var(--color-slate-100) 63%);
+  background-size: 400% 100%;
+  animation: var(--animate-shimmer);
+}
+
+/* People who prefer less motion get no movement at all. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 @media print {
