@@ -8,7 +8,9 @@ import {
   RemoteError,
   type ChildRow,
   type ChildTable,
+  type Invite,
   type InvitePreview,
+  type JoinPick,
   type Remote,
   type RemoteExpenseRow,
   type RemoteMemberRow,
@@ -23,7 +25,9 @@ export class FakeServer {
   private tick = Date.parse('2026-03-01T00:00:00Z')
   trips = new Map<string, Stored<RemoteTripRow>>()
   members: RemoteMemberRow[] = []
-  invites = new Map<string, { tripId: string; revoked: boolean }>()
+  invites = new Map<string, { tripId: string; revoked: boolean; expiresAt: string; createdAt: string }>()
+  /** Users who joined without an email (anonymous sign-in). */
+  anonymousUsers = new Set<string>()
   travellers = new Map<string, Stored<RemoteTravellerRow>>()
   expenses = new Map<string, Stored<RemoteExpenseRow>>()
 
@@ -33,7 +37,10 @@ export class FakeServer {
     return new Date(this.tick).toISOString()
   }
 
-  device(userId: string | null, email = `${userId}@example.test`) {
+  /** A device signed in as `userId`. Anonymous users have no email and cannot create trips. */
+  device(userId: string | null, options: { anonymous?: boolean; email?: string } = {}) {
+    if (userId && options.anonymous) this.anonymousUsers.add(userId)
+    const email = options.anonymous ? null : (options.email ?? `${userId}@example.test`)
     return new FakeRemote(this, userId, email)
   }
 }
@@ -44,7 +51,7 @@ export class FakeRemote implements Remote {
   constructor(
     private server: FakeServer,
     public userId: string | null,
-    private email: string,
+    private email: string | null,
   ) {}
 
   currentUserId() {
@@ -94,7 +101,7 @@ export class FakeRemote implements Remote {
 
   async insertTrip(row: RemoteTripRow) {
     const me = this.check()
-    if (row.owner_id !== me || this.server.trips.has(row.id)) {
+    if (this.server.anonymousUsers.has(me) || row.owner_id !== me || this.server.trips.has(row.id)) {
       throw new RemoteError('rejected', 'new row violates row-level security policy')
     }
     this.server.trips.set(row.id, { ...clone(row), updated_at: this.server.now(), deleted_at: null })
@@ -157,16 +164,33 @@ export class FakeRemote implements Remote {
     }
   }
 
-  async createInvite(tripId: string) {
+  async getActiveInvite(tripId: string): Promise<Invite | null> {
+    this.check()
+    if (!this.isMember(tripId)) return null
+    const active = [...this.server.invites.entries()]
+      .filter(([, inv]) => inv.tripId === tripId && !inv.revoked)
+      .sort((a, b) => b[1].createdAt.localeCompare(a[1].createdAt))[0]
+    return active ? { token: active[0], expiresAt: active[1].expiresAt } : null
+  }
+
+  async createInvite(tripId: string): Promise<Invite> {
     this.check()
     this.assertMember(tripId)
     const token = crypto.randomUUID().replace(/-/g, '')
-    this.server.invites.set(token, { tripId, revoked: false })
-    return { token, expiresAt: this.server.now() }
+    const createdAt = this.server.now()
+    const expiresAt = new Date(Date.parse(createdAt) + 14 * 86_400_000).toISOString()
+    this.server.invites.set(token, { tripId, revoked: false, createdAt, expiresAt })
+    return { token, expiresAt }
+  }
+
+  async revokeInvites(tripId: string) {
+    this.check()
+    if (!this.isMember(tripId)) return // RLS: no rows updated
+    for (const inv of this.server.invites.values()) if (inv.tripId === tripId) inv.revoked = true
   }
 
   async previewInvite(token: string): Promise<InvitePreview | null> {
-    this.check()
+    if (!this.server.online) throw new RemoteError('network', 'Failed to fetch')
     const inv = this.server.invites.get(token)
     const trip = inv && this.server.trips.get(inv.tripId)
     if (!inv || inv.revoked || !trip || trip.deleted_at) return null
@@ -175,17 +199,51 @@ export class FakeRemote implements Remote {
       tripName: trip.name,
       memberCount: this.server.members.filter((m) => m.trip_id === trip.id).length,
       alreadyMember: this.isMember(trip.id),
+      travellers: [...this.server.travellers.values()]
+        .filter((t) => t.trip_id === trip.id && !t.deleted_at)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+        .map((t) => ({ id: t.id, name: t.display_name, claimed: !!t.user_id, isOwner: !!t.user_id && t.user_id === trip.owner_id })),
     }
   }
 
-  async acceptInvite(token: string) {
+  async acceptInvite(token: string, pick: JoinPick = {}) {
     const me = this.check()
     const preview = await this.previewInvite(token)
     if (!preview) throw new RemoteError('rejected', 'This invite link is invalid, expired or was revoked')
-    if (!preview.alreadyMember) {
-      this.server.members.push({ trip_id: preview.tripId, user_id: me, role: 'member', email: this.email, joined_at: this.server.now() })
+    const trip = this.server.trips.get(preview.tripId)!
+    const picked = pick.travellerId ? this.server.travellers.get(pick.travellerId) : undefined
+    if (pick.travellerId) {
+      if (!picked || picked.trip_id !== trip.id || picked.deleted_at) {
+        throw new RemoteError('rejected', 'That name is no longer on this trip. Go back and pick again')
+      }
+      if (picked.user_id && picked.user_id === trip.owner_id && picked.user_id !== me) {
+        throw new RemoteError('rejected', 'That name belongs to the person who owns this trip')
+      }
     }
-    return preview.tripId
+    if (!preview.alreadyMember) {
+      this.server.members.push({ trip_id: trip.id, user_id: me, role: 'member', email: this.email, joined_at: this.server.now() })
+    }
+    const mine = () => [...this.server.travellers.values()].filter((t) => t.trip_id === trip.id && t.user_id === me)
+    const touch = (t: Stored<RemoteTravellerRow>) => {
+      t.updated_at = this.server.now()
+    }
+    if (picked) {
+      for (const t of mine()) if (t.id !== picked.id) { t.user_id = null; touch(t) }
+      const previous = picked.user_id
+      picked.user_id = me
+      touch(picked)
+      if (previous && previous !== me && this.server.anonymousUsers.has(previous)) {
+        this.server.members = this.server.members.filter((m) => !(m.trip_id === trip.id && m.user_id === previous && m.role !== 'owner'))
+      }
+    } else if (pick.newName?.trim()) {
+      for (const t of mine()) { t.user_id = null; touch(t) }
+      const now = this.server.now()
+      const id = crypto.randomUUID()
+      this.server.travellers.set(id, {
+        id, trip_id: trip.id, display_name: pick.newName.trim(), user_id: me, created_at: now, updated_at: now, deleted_at: null,
+      })
+    }
+    return trip.id
   }
 
   async removeMember(tripId: string, userId: string) {

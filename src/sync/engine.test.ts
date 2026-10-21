@@ -5,16 +5,17 @@ import { computeBalances } from '../features/splitting/allocate'
 import { FakeServer } from '../test/fakeServer'
 import { tripInput } from '../test/fixtures'
 import { SyncEngine } from './engine'
+import { tripToRemote } from './mapping'
 
 const opened: TravelDb[] = []
 afterEach(async () => {
   for (const db of opened.splice(0)) await db.delete()
 })
 
-function device(server: FakeServer, userId: string) {
+function device(server: FakeServer, userId: string, options: { anonymous?: boolean } = {}) {
   const db = new TravelDb(`device-${userId}-${Math.random()}`)
   opened.push(db)
-  const engine = new SyncEngine(db, server.device(userId))
+  const engine = new SyncEngine(db, server.device(userId, options))
   const { tripsRepo, travellersRepo, expensesRepo, categoriesRepo } = engine.repos
   return {
     db,
@@ -48,20 +49,19 @@ function device(server: FakeServer, userId: string) {
   }
 }
 
-/** Alice creates and shares a trip; Bob joins through an invite. */
+/** Alice creates and shares a trip; Bob (no email) joins through an invite by picking his name. */
 async function sharedTrip() {
   const server = new FakeServer()
   const alice = device(server, 'alice')
-  const bob = device(server, 'bob')
+  const bob = device(server, 'bob', { anonymous: true })
   await alice.db.open()
   await bob.db.open()
   const trip = await alice.tripsRepo.create(tripInput(), ['Alice', 'Bob'])
   const [aliceT, bobT] = await alice.travellersRepo.listByTrip(trip.id)
   await alice.addExpense(trip.id, { amount: '90' })
   await alice.engine.shareTrip(trip.id, aliceT!.id)
-  const { token } = await alice.engine.createInvite(trip.id)
-  await bob.engine.joinWithInvite(token)
-  await bob.travellersRepo.linkUser(bobT!.id, 'bob')
+  const { token } = await alice.engine.getOrCreateInvite(trip.id)
+  await bob.engine.joinWithInvite(token, { travellerId: bobT!.id })
   await bob.engine.sync()
   await alice.engine.sync()
   return { server, alice, bob, tripId: trip.id, aliceT: aliceT!, bobT: bobT! }
@@ -223,7 +223,7 @@ describe('sync engine', () => {
     expect((await alice.db.members.where('tripId').equals(tripId).toArray()).map((m) => m.userId)).toEqual(['alice'])
 
     // Rejoin, then the owner removes Bob.
-    const { token } = await alice.engine.createInvite(tripId)
+    const { token } = await alice.engine.getOrCreateInvite(tripId)
     await bob.engine.joinWithInvite(token)
     await alice.engine.removeMember(tripId, 'bob')
     await bob.engine.sync()
@@ -249,6 +249,22 @@ describe('sync engine', () => {
     expect(await solo.tripsRepo.get(trip.id)).toMatchObject({ syncMode: 'local' })
   })
 
+  it('can finish sharing after an earlier attempt stopped halfway', async () => {
+    const server = new FakeServer()
+    const alice = device(server, 'alice')
+    const trip = await alice.tripsRepo.create(tripInput(), ['Alice'])
+    // The trip reached the server, but the app stopped before marking it shared locally.
+    await alice.engine.remote.insertTrip(tripToRemote(trip, 'alice'))
+    const invite = await alice.engine.shareTrip(trip.id)
+    expect(invite?.token).toMatch(/^[0-9a-f]{32}$/)
+    expect(await alice.tripsRepo.get(trip.id)).toMatchObject({ syncMode: 'cloud' })
+    expect(server.members.filter((m) => m.trip_id === trip.id)).toHaveLength(1)
+    // Someone else's trip id can't be claimed this way.
+    const mallory = device(server, 'mallory')
+    await mallory.db.trips.add({ ...trip, syncMode: 'local' })
+    await expect(mallory.engine.shareTrip(trip.id)).rejects.toThrow(/row-level security/)
+  })
+
   it('refuses to share sample trips and reports signed-out state', async () => {
     const server = new FakeServer()
     const d = device(server, 'x')
@@ -266,6 +282,87 @@ describe('sync engine', () => {
     await alice.engine.removeAllCloudTrips()
     expect(await alice.tripsRepo.get(tripId)).toBeUndefined()
     expect(await alice.tripsRepo.get(local.id)).toBeTruthy()
+  })
+
+  it('links the picked name at join time, so the friend is "you" immediately', async () => {
+    const { bob, tripId, bobT } = await sharedTrip()
+    const mine = (await bob.travellersRepo.listByTrip(tripId)).filter((t) => t.userId === 'bob')
+    expect(mine.map((t) => t.id)).toEqual([bobT.id])
+  })
+
+  it('shows a friend who has not signed in the trip and who they can be', async () => {
+    const { server, alice, tripId, aliceT } = await sharedTrip()
+    const { token } = await alice.engine.getOrCreateInvite(tripId)
+    const visitor = server.device(null)
+    const preview = await visitor.previewInvite(token)
+    expect(preview).toMatchObject({ tripName: 'Test Trip', memberCount: 2 })
+    expect(preview!.travellers.map((t) => [t.name, t.isOwner])).toEqual([
+      ['Alice', true],
+      ['Bob', false],
+    ])
+    expect(aliceT.displayName).toBe('Alice')
+    expect(await visitor.previewInvite('wrong')).toBeNull()
+  })
+
+  it('lets a friend join with a new name and not be linked to anyone else', async () => {
+    const { server, alice, tripId } = await sharedTrip()
+    const kim = device(server, 'kim', { anonymous: true })
+    const { token } = await alice.engine.getOrCreateInvite(tripId)
+    await kim.engine.joinWithInvite(token, { newName: 'Kim' })
+    await alice.engine.sync()
+    const names = (await alice.travellersRepo.listByTrip(tripId)).map((t) => `${t.displayName}:${t.userId}`).sort()
+    expect(names).toEqual(['Alice:alice', 'Bob:bob', 'Kim:kim'])
+    expect(await kim.snapshot(tripId)).toEqual(await alice.snapshot(tripId))
+  })
+
+  it('moves a name to a new phone when the same person joins again', async () => {
+    const { server, alice, bob, tripId, bobT } = await sharedTrip()
+    const newPhone = device(server, 'bob-new-phone', { anonymous: true })
+    const { token } = await alice.engine.getOrCreateInvite(tripId)
+    await newPhone.engine.joinWithInvite(token, { travellerId: bobT.id })
+    expect((await newPhone.travellersRepo.listByTrip(tripId)).find((t) => t.id === bobT.id)?.userId).toBe('bob-new-phone')
+    // The old phone loses access at its next sync; the name now belongs to the new phone.
+    await bob.engine.sync()
+    expect(await bob.tripsRepo.get(tripId)).toBeUndefined()
+    await alice.engine.sync()
+    expect((await alice.db.members.where('tripId').equals(tripId).toArray()).map((m) => m.userId).sort()).toEqual(['alice', 'bob-new-phone'])
+  })
+
+  it("does not let a friend take the owner's name", async () => {
+    const { server, alice, tripId, aliceT } = await sharedTrip()
+    const mallory = device(server, 'mallory', { anonymous: true })
+    const { token } = await alice.engine.getOrCreateInvite(tripId)
+    await expect(mallory.engine.joinWithInvite(token, { travellerId: aliceT.id })).rejects.toThrow(/owns this trip/)
+  })
+
+  it('does not let a friend without an email share trips of their own', async () => {
+    const server = new FakeServer()
+    const guest = device(server, 'guest', { anonymous: true })
+    const trip = await guest.tripsRepo.create(tripInput(), ['Me'])
+    await expect(guest.engine.shareTrip(trip.id)).rejects.toThrow(/row-level security/)
+    expect(server.trips.size).toBe(0)
+  })
+
+  it('reuses one invite link for everyone until it is switched off', async () => {
+    const { server, alice, bob, tripId } = await sharedTrip()
+    const first = await alice.engine.getOrCreateInvite(tripId)
+    expect(await bob.engine.getOrCreateInvite(tripId)).toEqual(first)
+    expect(await alice.engine.getInvite(tripId)).toEqual(first)
+
+    await alice.engine.switchOffInvites(tripId)
+    expect(await alice.engine.getInvite(tripId)).toBeNull()
+    const late = device(server, 'late', { anonymous: true })
+    await expect(late.engine.joinWithInvite(first.token, { newName: 'Late' })).rejects.toThrow(/invalid, expired/)
+    expect((await alice.engine.getOrCreateInvite(tripId)).token).not.toBe(first.token)
+  })
+
+  it('switches the link off when the owner removes someone, so they cannot rejoin', async () => {
+    const { server, alice, tripId } = await sharedTrip()
+    const { token } = await alice.engine.getOrCreateInvite(tripId)
+    await alice.engine.removeMember(tripId, 'bob')
+    expect(await alice.engine.getInvite(tripId)).toBeNull()
+    const bobAgain = device(server, 'bob', { anonymous: true })
+    await expect(bobAgain.engine.joinWithInvite(token, { newName: 'Bob' })).rejects.toThrow(/invalid, expired/)
   })
 
   it('handles large trips in batches', async () => {

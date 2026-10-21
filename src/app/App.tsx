@@ -1,7 +1,7 @@
 import { useEffect, type ComponentType } from 'react'
 import { JoinPage } from '../features/sharing/JoinPage'
 import { SyncIndicator } from '../components/SyncIndicator'
-import { pendingInvite, useAuth } from '../sync/cloud'
+import { pendingInvite, pendingShare, rememberPendingShare, useAuth } from '../sync/cloud'
 import { href, navigate, paths, useRoute, type Route } from './router'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { tripsRepo } from '../db/repositories'
@@ -53,7 +53,6 @@ function activeNav(route: Route): NavKey | null {
     case 'report':
       return 'report'
     case 'settings':
-    case 'join':
       return 'settings'
     default:
       return null
@@ -73,10 +72,17 @@ export function App() {
   const lastTripId = currentTripId ?? readLastTrip()
   const auth = useAuth()
 
-  // After signing in from an invite link, continue joining that trip.
+  // The sign-in email opens the home page. Continue what the person was doing:
+  // joining a trip from an invite link, or sharing one of their trips.
   useEffect(() => {
-    const token = auth.status === 'signedIn' ? pendingInvite() : null
-    if (token && route.name !== 'join') navigate(paths.join(token))
+    if (auth.status !== 'signedIn') return
+    const token = pendingInvite()
+    if (token && route.name !== 'join') return navigate(paths.join(token))
+    const tripId = pendingShare()
+    if (tripId) {
+      rememberPendingShare(null)
+      navigate(paths.travellers(tripId))
+    }
   }, [auth.status, route.name])
 
   useEffect(() => {

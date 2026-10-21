@@ -37,7 +37,8 @@ export type AuthState =
   | { status: 'disabled' }
   | { status: 'loading' }
   | { status: 'signedOut'; error?: string }
-  | { status: 'signedIn'; userId: string; email: string }
+  /** `anonymous`: joined with just a name (no email); can join trips but not create them. */
+  | { status: 'signedIn'; userId: string; email: string; anonymous: boolean }
 
 let auth: AuthState = supabase ? { status: 'loading' } : { status: 'disabled' }
 const authListeners = new Set<() => void>()
@@ -79,7 +80,12 @@ let stopRealtime: (() => void) | null = null
 function applySession(session: Session | null) {
   remote!.setUser(session?.user.id ?? null)
   if (session) {
-    setAuth({ status: 'signedIn', userId: session.user.id, email: session.user.email ?? '' })
+    setAuth({
+      status: 'signedIn',
+      userId: session.user.id,
+      email: session.user.email ?? '',
+      anonymous: session.user.is_anonymous ?? false,
+    })
     // Live updates only while signed in (saves connections on the free tier).
     stopRealtime ??= remote!.subscribe(() => requestSync(300))
     requestSync(0)
@@ -138,6 +144,16 @@ export async function sendSignInEmail(email: string) {
   if (error) throw new Error(friendlyAuthError(error.message))
 }
 
+/**
+ * Creates a no-email account on this device, so a friend can join a trip
+ * with just a name. Needs "Allow anonymous sign-ins" on in Supabase.
+ */
+export async function signInWithoutEmail() {
+  const { data, error } = await requireClient().auth.signInAnonymously()
+  if (error) throw new Error(friendlyAuthError(error.message))
+  applySession(data.session)
+}
+
 /** Signs in with the 6-digit code from the email. */
 export async function verifySignInCode(email: string, code: string) {
   const { error } = await requireClient().auth.verifyOtp({ email, token: code, type: 'email' })
@@ -152,6 +168,9 @@ export async function signOut() {
 }
 
 function friendlyAuthError(message: string) {
+  if (/anonymous/i.test(message) && /disabled|not enabled|not allowed/i.test(message)) {
+    return 'Joining without an email is not switched on yet. Ask the person who shared the trip to turn on "Allow anonymous sign-ins" in Supabase.'
+  }
   if (/rate limit|security purposes|seconds/i.test(message)) {
     return 'Too many emails requested. Wait a minute, then try again.'
   }
@@ -160,28 +179,37 @@ function friendlyAuthError(message: string) {
   return message
 }
 
-// ---------- Invite links ----------
+// ---------- Remembering what to do after an email sign-in ----------
+// The sign-in email opens the app's home page, so we note where the person was.
 
 const PENDING_INVITE_KEY = 'tet:pendingInvite'
+const PENDING_SHARE_KEY = 'tet:pendingShare'
+
+function remember(key: string, value: string | null) {
+  try {
+    if (value) localStorage.setItem(key, value)
+    else localStorage.removeItem(key)
+  } catch {
+    // Storage unavailable; the person just continues manually.
+  }
+}
+
+function recall(key: string): string | null {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
 
 export function inviteUrl(token: string) {
   return `${window.location.origin}${import.meta.env.BASE_URL}#/join/${token}`
 }
 
-/** Remembers an invite while the person signs in (the email link returns to the home page). */
-export function rememberPendingInvite(token: string | null) {
-  try {
-    if (token) localStorage.setItem(PENDING_INVITE_KEY, token)
-    else localStorage.removeItem(PENDING_INVITE_KEY)
-  } catch {
-    // Storage unavailable; the person can open the invite link again.
-  }
-}
+/** The invite the person was opening when they chose to sign in with email. */
+export const rememberPendingInvite = (token: string | null) => remember(PENDING_INVITE_KEY, token)
+export const pendingInvite = () => recall(PENDING_INVITE_KEY)
 
-export function pendingInvite(): string | null {
-  try {
-    return localStorage.getItem(PENDING_INVITE_KEY)
-  } catch {
-    return null
-  }
-}
+/** The trip the person was about to share when they chose to sign in with email. */
+export const rememberPendingShare = (tripId: string | null) => remember(PENDING_SHARE_KEY, tripId)
+export const pendingShare = () => recall(PENDING_SHARE_KEY)

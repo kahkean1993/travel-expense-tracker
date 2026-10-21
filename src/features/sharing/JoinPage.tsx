@@ -1,20 +1,49 @@
 import { useEffect, useState } from 'react'
 import { navigate, paths } from '../../app/router'
-import { Button, Card, EmptyState, FieldError, LinkButton, Loading, PageHeader } from '../../components/ui'
+import { Button, Card, ChipGroup, EmptyState, Field, FieldError, LinkButton, Loading, PageHeader, TextInput } from '../../components/ui'
 import { useBusy } from '../../components/useBusy'
-import { cloudConfigured, rememberPendingInvite, syncEngine, useAuth } from '../../sync/cloud'
+import {
+  cloudConfigured,
+  rememberPendingInvite,
+  requestSync,
+  signInWithoutEmail,
+  syncEngine,
+  useAuth,
+} from '../../sync/cloud'
 import type { InvitePreview } from '../../sync/remote'
-import { SignInForm } from './SignInForm'
 import { describeError } from './errors'
+import { SignInForm } from './SignInForm'
 
-/** Opened from an invite link: #/join/<token>. */
+const NEW_NAME = '__new__'
+
+/** Opened from an invite link: #/join/<token>. Tap the link, pick your name, join. */
 export function JoinPage({ token }: { token: string }) {
   const auth = useAuth()
+  const [preview, setPreview] = useState<InvitePreview | null | undefined>(undefined)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  // Coming back from an email sign-in: this is the page we were heading to.
+  useEffect(() => {
+    if (auth.status === 'signedIn') rememberPendingInvite(null)
+  }, [auth.status])
 
   useEffect(() => {
-    // The sign-in email returns to the home page; remember where we were.
-    if (auth.status === 'signedOut') rememberPendingInvite(token)
-  }, [auth.status, token])
+    if (!cloudConfigured || !syncEngine) return
+    let cancelled = false
+    syncEngine.remote.previewInvite(token).then(
+      (p) => {
+        if (!cancelled) setPreview(p)
+      },
+      (e: unknown) => {
+        if (cancelled) return
+        setLoadError(describeError(e))
+        setPreview(null)
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [token])
 
   if (!cloudConfigured) {
     return (
@@ -23,88 +52,119 @@ export function JoinPage({ token }: { token: string }) {
       </EmptyState>
     )
   }
-  if (auth.status === 'loading') return <Loading />
+  if (preview === undefined) return <Loading label="Opening invite…" />
+  if (!preview) {
+    return (
+      <EmptyState title="This invite can't be used" action={<LinkButton to={paths.trips()}>Go to trips</LinkButton>}>
+        {loadError ?? 'The link has expired or was switched off. Ask whoever shared the trip for a new link.'}
+      </EmptyState>
+    )
+  }
   return (
     <div className="mx-auto max-w-lg">
       <PageHeader title="Join a shared trip" />
-      {auth.status === 'signedIn' ? (
-        <JoinWithAccount key={token} token={token} />
-      ) : (
-        <Card>
-          <SignInForm intro="You've been invited to a shared trip. Sign in with your email to join; you'll come back here afterwards." />
-          {auth.status === 'signedOut' && auth.error ? (
-            <div className="mt-3">
-              <FieldError>{auth.error}</FieldError>
-            </div>
-          ) : null}
-        </Card>
-      )}
+      <JoinCard key={token} token={token} preview={preview} signedIn={auth.status === 'signedIn'} authLoading={auth.status === 'loading'} />
     </div>
   )
 }
 
-function JoinWithAccount({ token }: { token: string }) {
-  const [preview, setPreview] = useState<InvitePreview | null | undefined>(undefined)
+function JoinCard({
+  token,
+  preview,
+  signedIn,
+  authLoading,
+}: {
+  token: string
+  preview: InvitePreview
+  signedIn: boolean
+  authLoading: boolean
+}) {
+  const choices = preview.travellers.filter((t) => !t.isOwner)
+  const [choice, setChoice] = useState(choices.length === 0 ? NEW_NAME : '')
+  const [newName, setNewName] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [emailMode, setEmailMode] = useState(false)
   const [busy, run] = useBusy()
 
-  useEffect(() => {
-    // We're here now; stop redirecting to this invite after sign-in.
-    rememberPendingInvite(null)
-    let cancelled = false
-    syncEngine!.remote.previewInvite(token).then(
-      (p) => {
-        if (!cancelled) setPreview(p)
-      },
-      (e: unknown) => {
-        if (!cancelled) {
-          setPreview(null)
-          setError(describeError(e))
-        }
-      },
-    )
-    return () => {
-      cancelled = true
-    }
-  }, [token])
+  const needsName = choice === NEW_NAME
+  const canJoin = preview.alreadyMember || (needsName ? newName.trim().length > 0 : choice !== '')
 
   function join() {
+    setError(null)
     void run(async () => {
       try {
-        setError(null)
-        const tripId = await syncEngine!.joinWithInvite(token)
-        navigate(paths.travellers(tripId), { replace: true })
+        // Friends need no email: this phone gets its own account behind the scenes.
+        if (!signedIn) await signInWithoutEmail()
+        const pick = preview.alreadyMember ? {} : needsName ? { newName: newName.trim() } : { travellerId: choice }
+        const tripId = await syncEngine!.joinWithInvite(token, pick)
+        requestSync(0)
+        navigate(paths.dashboard(tripId), { replace: true })
       } catch (e) {
         setError(describeError(e))
       }
     })
   }
 
-  if (preview === undefined) return <Loading label="Checking invite…" />
-  if (!preview) {
-    return (
-      <EmptyState
-        title="This invite can't be used"
-        action={
-          <LinkButton to={paths.trips()}>Go to trips</LinkButton>
-        }
-      >
-        {error ?? 'The link is invalid, has expired, or was revoked. Ask the trip owner for a new invite link.'}
-      </EmptyState>
-    )
-  }
   return (
-    <Card className="space-y-3">
-      <p className="text-sm text-slate-600">You're invited to</p>
-      <p className="text-xl font-semibold">{preview.tripName}</p>
-      <p className="text-sm text-slate-600">
-        {preview.memberCount} {preview.memberCount === 1 ? 'person is' : 'people are'} on this trip. Members can see and edit
-        all of its expenses.
-      </p>
-      <Button variant="primary" disabled={busy} onClick={join}>
+    <Card className="space-y-4">
+      <div>
+        <p className="text-sm text-slate-600">You're invited to</p>
+        <p className="text-xl font-semibold break-words">{preview.tripName}</p>
+        <p className="text-sm text-slate-600">
+          {preview.memberCount} {preview.memberCount === 1 ? 'person is' : 'people are'} on this trip. You'll see and add expenses
+          together.
+        </p>
+      </div>
+
+      {preview.alreadyMember ? (
+        <p className="text-sm text-slate-700">You're already on this trip.</p>
+      ) : (
+        <>
+          {choices.length > 0 ? (
+            <ChipGroup
+              label="Who are you?"
+              options={[...choices.map((t) => ({ value: t.id, label: t.name })), { value: NEW_NAME, label: "I'm not on the list" }]}
+              value={choice}
+              onChange={setChoice}
+            />
+          ) : null}
+          {needsName ? (
+            <Field label="Your name" htmlFor="join-name">
+              <TextInput
+                id="join-name"
+                value={newName}
+                maxLength={40}
+                autoFocus={choices.length > 0}
+                placeholder="e.g. Alex"
+                onChange={(e) => setNewName(e.target.value)}
+              />
+            </Field>
+          ) : null}
+          {choices.some((t) => t.claimed) ? (
+            <p className="text-xs text-slate-500">Joined before on another phone? Pick the same name to continue on this one.</p>
+          ) : null}
+        </>
+      )}
+
+      <Button variant="primary" className="w-full" disabled={busy || authLoading || !canJoin} onClick={join}>
         {busy ? 'Joining…' : preview.alreadyMember ? 'Open trip' : 'Join trip'}
       </Button>
       {error ? <FieldError>{error}</FieldError> : null}
+
+      {!signedIn && !authLoading ? (
+        <div className="border-t border-slate-200 pt-3 text-sm">
+          {emailMode ? (
+            <SignInForm
+              onEmailSent={() => rememberPendingInvite(token)}
+              intro="Prefer to use your email? Sign in and you'll come back here. This lets you use the same account on other phones."
+            />
+          ) : (
+            <button type="button" className="text-slate-600 underline" onClick={() => setEmailMode(true)}>
+              I'd rather sign in with my email
+            </button>
+          )}
+        </div>
+      ) : null}
     </Card>
   )
 }

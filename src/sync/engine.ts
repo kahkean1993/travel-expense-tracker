@@ -25,7 +25,15 @@ import {
   tripFromRemote,
   tripToRemote,
 } from './mapping'
-import { RemoteError, type ChildTable, type Remote, type RemoteExpenseRow, type RemoteTravellerRow } from './remote'
+import {
+  RemoteError,
+  type ChildTable,
+  type Invite,
+  type JoinPick,
+  type Remote,
+  type RemoteExpenseRow,
+  type RemoteTravellerRow,
+} from './remote'
 
 /** Re-download rows this close to the last cursor, in case of slow commits on the server. */
 const PULL_OVERLAP_MS = 60_000
@@ -289,17 +297,28 @@ export class SyncEngine {
 
   /**
    * Uploads a local trip and turns it into a shared trip owned by the
-   * signed-in user. Needs a connection. `meTravellerId` marks which
-   * traveller is the owner.
+   * signed-in user, with its invite link ready to send. Needs a connection.
+   * `meTravellerId` marks which traveller is the owner. Safe to repeat if an
+   * earlier attempt stopped halfway.
    */
-  async shareTrip(tripId: string, meTravellerId?: string) {
+  async shareTrip(tripId: string, meTravellerId?: string): Promise<Invite | null> {
     const userId = this.requireUser()
     const trip = await this.db.trips.get(tripId)
     if (!trip) throw new Error('Trip not found.')
-    if (isCloudTrip(trip)) return
+    if (isCloudTrip(trip)) return this.remote.getActiveInvite(tripId)
     if (trip.isSample) throw new Error('Sample trips cannot be shared. Create your own trip first.')
 
-    await this.remote.insertTrip(tripToRemote(trip, userId))
+    try {
+      await this.remote.insertTrip(tripToRemote(trip, userId))
+    } catch (error) {
+      // An earlier attempt may have created the trip online before stopping.
+      if (!(error instanceof RemoteError) || error.kind !== 'rejected') throw error
+      const existing = await this.remote.fetchTrip(tripId)
+      if (!existing || existing.owner_id !== userId) throw error
+    }
+    // Create the invite link before the trip flips to "shared" on this device,
+    // so the screen that appears next already has it.
+    const invite = (await this.remote.getActiveInvite(tripId)) ?? (await this.remote.createInvite(tripId))
     const db = this.db
     await db.transaction('rw', [db.trips, db.travellers, db.expenses, db.outbox], async () => {
       const ts = new Date().toISOString()
@@ -311,19 +330,33 @@ export class SyncEngine {
       await queueAll('expenses', await db.expenses.where('tripId').equals(tripId).primaryKeys())
     })
     await this.sync()
+    return invite
   }
 
-  /** Joins a trip with an invite token and downloads it. Returns the trip id. */
-  async joinWithInvite(token: string) {
+  /** Joins a trip with an invite token, links who the person is, and downloads the trip. Returns the trip id. */
+  async joinWithInvite(token: string, pick: JoinPick = {}) {
     this.requireUser()
-    const tripId = await this.remote.acceptInvite(token)
+    const tripId = await this.remote.acceptInvite(token, pick)
     await this.pullTrip(tripId)
     return tripId
   }
 
-  createInvite(tripId: string) {
+  /** The invite link that is currently switched on, if any. */
+  getInvite(tripId: string): Promise<Invite | null> {
     this.requireUser()
-    return this.remote.createInvite(tripId)
+    return this.remote.getActiveInvite(tripId)
+  }
+
+  /** Returns the working invite link, creating one if there is none. One link serves everyone. */
+  async getOrCreateInvite(tripId: string): Promise<Invite> {
+    this.requireUser()
+    return (await this.remote.getActiveInvite(tripId)) ?? (await this.remote.createInvite(tripId))
+  }
+
+  /** Switches the invite link off. */
+  switchOffInvites(tripId: string) {
+    this.requireUser()
+    return this.remote.revokeInvites(tripId)
   }
 
   /** Leaves a shared trip (members only) and removes this device's copy. */
@@ -333,10 +366,14 @@ export class SyncEngine {
     await this.repos.tripsRepo.removeLocalCopy(tripId)
   }
 
-  /** Owner removes another member. */
+  /**
+   * Owner removes another member. Existing invite links are switched off as
+   * well, so the removed person can't simply rejoin with the link they have.
+   */
   async removeMember(tripId: string, userId: string) {
     this.requireUser()
     await this.remote.removeMember(tripId, userId)
+    await this.remote.revokeInvites(tripId)
     await this.pullTrip(tripId)
   }
 

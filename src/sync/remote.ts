@@ -69,11 +69,32 @@ export interface RemoteMemberRow {
   joined_at: string
 }
 
+export interface InviteTraveller {
+  id: string
+  name: string
+  /** Someone has already joined as this traveller. */
+  claimed: boolean
+  /** This traveller is the trip owner, so it can't be picked by a friend. */
+  isOwner: boolean
+}
+
 export interface InvitePreview {
   tripId: string
   tripName: string
   memberCount: number
   alreadyMember: boolean
+  travellers: InviteTraveller[]
+}
+
+/** Who a person is on the trip they are joining: an existing traveller, or a new name. */
+export interface JoinPick {
+  travellerId?: string
+  newName?: string
+}
+
+export interface Invite {
+  token: string
+  expiresAt: string
 }
 
 export type ChildTable = 'travellers' | 'expenses'
@@ -108,8 +129,14 @@ export interface Remote {
   updateTrip(row: RemoteTripRow): Promise<void>
   upsert<T extends ChildTable>(table: T, rows: ChildRow<T>[]): Promise<void>
   softDelete(table: 'trips' | ChildTable, ids: string[]): Promise<void>
-  createInvite(tripId: string): Promise<{ token: string; expiresAt: string }>
+  /** The newest invite link that still works, if any. */
+  getActiveInvite(tripId: string): Promise<Invite | null>
+  createInvite(tripId: string): Promise<Invite>
+  /** Switches off every invite link of the trip. */
+  revokeInvites(tripId: string): Promise<void>
+  /** Works without signing in, so the join screen can show the trip first. */
   previewInvite(token: string): Promise<InvitePreview | null>
-  acceptInvite(token: string): Promise<string>
+  /** Joins the trip (adding the membership) and links the picked traveller. Returns the trip id. */
+  acceptInvite(token: string, pick?: JoinPick): Promise<string>
   removeMember(tripId: string, userId: string): Promise<void>
 }
