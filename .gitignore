@@ -1,0 +1,9 @@
+node_modules
+dist
+dev-dist
+*.local
+.DS_Store
+# Never commit personal expense exports/backups
+*.backup.json
+travel-expenses-*.json
+*.csv
