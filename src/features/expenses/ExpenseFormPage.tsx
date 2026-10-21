@@ -8,6 +8,7 @@ import { Button, Card, ChipGroup, EmptyState, Field, FieldError, LinkButton, Loa
 import { inputClass } from '../../components/styles'
 import { CurrencySelect } from '../../components/CurrencySelect'
 import { useBusy } from '../../components/useBusy'
+import { useAuth } from '../../sync/cloud'
 import { currencySymbol, minorToInputString } from '../../lib/money/money'
 import { localDateString } from '../../lib/export/csv'
 import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS, type Expense, type ExpenseShare, type PaymentMethod } from '../../types/domain'
@@ -71,13 +72,22 @@ function ExpenseForm({
   sourceShares: ExpenseShare[]
 }) {
   const { trip, travellers, expenses, categories } = data
+  const auth = useAuth()
+  // On a shared trip, the signed-in person's own traveller is the default payer.
+  const myTraveller = auth.status === 'signedIn' ? travellers.find((t) => t.userId === auth.userId) : undefined
   const today = localDateString()
   const [values, setValues] = useState<ExpenseFormValues>(() => {
     if (source) {
       const v = formFromExpense(source, sourceShares, minorToInputString)
       return mode === 'duplicate' ? { ...v, date: today } : v
     }
-    return emptyExpenseForm(trip, travellers, today)
+    const blank = emptyExpenseForm(trip, travellers, today)
+    if (!myTraveller) return blank
+    return {
+      ...blank,
+      payerId: myTraveller.id,
+      participantIds: blank.splitMode === 'personal' ? [myTraveller.id] : blank.participantIds,
+    }
   })
   const [submitted, setSubmitted] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)

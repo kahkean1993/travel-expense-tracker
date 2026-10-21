@@ -14,6 +14,15 @@ export type SaveState =
 let state: SaveState = { kind: 'idle' }
 let pending = 0
 const listeners = new Set<() => void>()
+const savedListeners = new Set<() => void>()
+
+/** Runs `listener` after every successful local write (used to schedule sync). */
+export function onLocalSave(listener: () => void) {
+  savedListeners.add(listener)
+  return () => {
+    savedListeners.delete(listener)
+  }
+}
 
 function set(next: SaveState) {
   state = next
@@ -37,6 +46,7 @@ export async function trackSave<T>(write: () => Promise<T>): Promise<T> {
     const result = await write()
     pending--
     if (pending === 0) set({ kind: 'saved', at: Date.now() })
+    savedListeners.forEach((l) => l())
     return result
   } catch (error) {
     pending--

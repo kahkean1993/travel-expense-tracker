@@ -2,7 +2,7 @@
 
 A mobile-first web app for recording trip spending, tracking a budget, splitting shared costs with travel companions and exporting an end-of-trip report. It runs entirely in the browser, works offline after the first visit, and can be installed as an app (PWA).
 
-> **Your data stays on this device.** Version 1 stores everything in this browser's IndexedDB. It does **not** sync between your phone and laptop, or between people. Clearing browser data can erase it, so use **Settings & Backup → Download backup** regularly.
+> **Where your data lives.** Trips are stored in this browser's IndexedDB on this device. If shared trips are set up (see [Shared trips](#shared-trips)), you can sign in with your email and share a trip with 3–4 companions; shared trips are also stored in your Supabase project and sync between members' devices. Trips you don't share never leave the device. Clearing browser data can erase local trips, so use **Settings & Backup → Download backup** regularly.
 
 ## Features
 
@@ -62,6 +62,48 @@ Published URL pattern:
 
 The workflow derives `BASE_PATH` from the repository name automatically, so scripts, styles, the manifest, icons and the service worker all resolve under that subpath. Routes use hash URLs (`#/trips/…`), so refreshing any screen works without server rewrites.
 
+## Shared trips
+
+Shared trips let several people record expenses for the same trip from their own phones. They are optional: without the settings below the app runs in local-only mode, exactly like version 1.
+
+### How it works
+
+- **Sign in** with your email: the app emails a sign-in link (and, if you enable it, a 6-digit code). No passwords.
+- **Share** a trip from **Split → Share this trip**. You pick which traveller you are, and the trip is uploaded to your account.
+- **Invite** companions with **Create invite link** and send the link (WhatsApp, email…). Links work for 14 days. Anyone with the link can join, so only send it to your companions. Each person signs in, opens the link, taps **Join trip**, and picks which traveller they are.
+- **Everyone sees and edits the same trip.** Changes upload automatically and appear on other phones within seconds when they're online.
+- **Offline still works.** Expenses are saved on the phone first and upload when the connection is back. The top bar shows "N to upload" while offline.
+- **Conflicts:** if two people edit the same expense before syncing, the last edit to reach the server wins (the amounts and the split always stay together). Different expenses never conflict.
+- **Owner and members:** the person who shared the trip is its owner. Only the owner can delete the trip (for everyone) or remove members. Members can leave a trip.
+- **Signing out** removes shared trips from that device. They stay online and come back when you sign in again. Trips you never shared are not affected.
+- **Backups** still work. A restored trip is always a local, unshared copy.
+
+The security rules live in the database (Row Level Security in `supabase/migrations`): people can only read or change trips they are a member of, and the publishable key in the app grants nothing on its own.
+
+### Turn on shared trips (one-time setup, about 15 minutes)
+
+You need a free [Supabase](https://supabase.com) account. The dashboard changes from time to time, so menu names may differ slightly from these steps.
+
+1. **Create a project.** In Supabase, create a new project and choose a region near you (for Malaysia, Singapore). Save the database password somewhere safe; the app doesn't need it.
+2. **Create the tables.** Open **SQL Editor**, paste the whole of [`supabase/migrations/20261021000000_shared_trips.sql`](supabase/migrations/20261021000000_shared_trips.sql), and run it once. It creates the tables, security rules, invite functions and realtime updates. Supabase's security advisor may flag the `SECURITY DEFINER` functions; they are intentional (they let invites add members) and each one checks the signed-in user.
+3. **Allow the app's address for sign-in links.** Under **Authentication → URL Configuration**:
+   - **Site URL:** `https://kahkean1993.github.io/travel-expense-tracker/`
+   - **Redirect URLs:** add the same address, and `http://localhost:5173/` if you also run the app locally.
+4. **(Recommended) Add the sign-in code to the email.** Under **Authentication → Email Templates → Magic Link**, include `{{ .Token }}` next to the link, for example `Your code: {{ .Token }}`. Then people whose email app opens links in a different browser can type the code instead.
+5. **(Recommended for regular use) Set up email sending.** Supabase's built-in email service only sends a small number of emails per hour and is meant for testing. If several people sign in on the same day, add your own SMTP provider under **Authentication → SMTP Settings** (providers such as Resend or Brevo have free tiers).
+6. **Copy the connection details.** Under **Project Settings → API Keys** (or **Data API**), copy the **Project URL** and the **publishable key** (`sb_publishable_…`; on older projects, the `anon` key). Never use the `service_role` or secret key in the app.
+7. **Give them to GitHub.** In the GitHub repository go to **Settings → Secrets and variables → Actions → Variables** and add two repository variables:
+   - `VITE_SUPABASE_URL` = the Project URL
+   - `VITE_SUPABASE_PUBLISHABLE_KEY` = the publishable key
+8. **Redeploy.** In the **Actions** tab, run the "Deploy to GitHub Pages" workflow again (or push any change). After it finishes, **Settings & Backup** shows **Account & shared trips**.
+
+For local development, copy `.env.example` to `.env.local` and fill in the same two values.
+
+### Costs and limits
+
+- Supabase's free plan comfortably covers a few people sharing trips. Free projects are **paused after about a week without activity**; restore yours from the Supabase dashboard (no data is lost). While it is paused, the app keeps working offline and syncs once the project is back.
+- Your email address is visible to the other members of trips you join.
+
 ## Backup and restore
 
 - **Back up**: Settings & Backup → *Download backup* saves `travel-expenses-backup-YYYY-MM-DD.json`, which contains every trip, traveller, expense, exchange rate, share, category and preference. Store it somewhere safe.
@@ -96,15 +138,20 @@ src/
     money/        Currency precision, parsing, conversion, formatting
     export/       CSV export and JSON backup format/validation/restore
     dates.ts      Date display helpers
+  sync/           Shared trips: sync engine, Supabase adapter, sign-in and scheduling (cloud.ts)
+  features/sharing/  Sign-in form, Share card, Join page, Account card
   types/          Domain model with storage conventions documented
-  test/           Test setup and synthetic fixtures
+  test/           Test setup, synthetic fixtures, in-memory sync server
+supabase/
+  migrations/     Database schema, security rules and invite functions
+  tests/          Schema and security-rule tests (run in PGlite)
 ```
 
-All screens read and write through `src/db/repositories.ts`. A future cloud backend (e.g. Supabase) could replace that layer without rewriting the screens.
+All screens read and write through `src/db/repositories.ts`. Writes to a shared trip also add an entry to a local outbox in the same transaction; `src/sync/engine.ts` uploads the outbox and downloads other members' changes.
 
 ### Database migrations
 
-The schema lives in `src/db/schema.ts` (`DB_SCHEMA_VERSION = 1`). To change it, add a new `db.version(n + 1).stores({...}).upgrade(...)` block. Never edit released versions. Then bump the constant, and if the backup shape changes, bump `BACKUP_FORMAT_VERSION` in `src/lib/export/backup.ts` and teach `parseBackup` to read older files.
+The schema lives in `src/db/schema.ts` (`DB_SCHEMA_VERSION = 2`; version 2 added the outbox and sync tables and marks existing trips as local). To change it, add a new `db.version(n + 1).stores({...}).upgrade(...)` block. Never edit released versions. Then bump the constant, and if the backup shape changes, bump `BACKUP_FORMAT_VERSION` in `src/lib/export/backup.ts` and teach `parseBackup` to read older files.
 
 ## Assumptions and decisions
 
@@ -120,7 +167,7 @@ The schema lives in `src/db/schema.ts` (`DB_SCHEMA_VERSION = 1`). To change it, 
 
 ## Testing
 
-`npm test` runs 57 tests covering:
+`npm test` runs 92 tests covering:
 
 - money: precision, parsing and validation, conversion direction, half-up rounding, tiny amounts, mixed currencies, formatting
 - splitting: equal and weighted remainders, custom amount validation, personal expenses, the payer's own share, balances summing to zero, and randomised settlement checks
@@ -128,12 +175,19 @@ The schema lives in `src/db/schema.ts` (`DB_SCHEMA_VERSION = 1`). To change it, 
 - backup: round-trip, merge never overwrites, invalid/newer/corrupted files rejected with data left untouched
 - CSV escaping, formula guard and content
 - expense form validation, and the router
+- database schema and security rules (`supabase/tests`, run in PGlite, an in-process Postgres with a minimal stand-in for Supabase's `auth` schema): non-members and signed-out users see nothing, members can read and write, ownership can't be taken over, only the owner can delete, invites work and can be revoked, share totals are enforced
+- sync engine with two simulated devices against an in-memory server: sharing and joining, changes both ways with identical balances, offline queueing, unsent edits never overwritten, deletions, custom categories, rejected changes (retry/discard), leaving and removal, sign-out, batching
+
+What is **not** covered by automated tests: the real Supabase services (sign-in emails, the hosted Data API and Realtime). Check those by hand once your project is set up: sign in on two phones, share a trip, join it, and add an expense on each.
 
 A browser smoke test was also run manually against the production build in Chromium. It covered phone (360 px) and desktop widths, creating a trip, adding expenses, a double-tap save, reload persistence, settlement, CSV export, print layout, backup, invalid import, delete then restore, and offline reload plus adding an expense while offline. It is not part of the repository, so add Playwright if you want it in CI.
 
-## Known limitations (version 1)
+## Known limitations
 
-- No cloud sync, login or sharing. Data is per browser and per device; use backups to move it.
+- Local-only trips stay per browser and per device; share a trip or use backups to move it.
+- Shared-trip conflicts are resolved per expense, last edit wins; there is no edit history.
+- Invite links can be used by anyone who has them until they expire (14 days); removing a member doesn't revoke links already sent.
+- Custom categories used in a shared trip appear for other members as trip categories; renaming a category later doesn't rename it on other devices.
 - Exchange rates are entered manually. There is no online rate lookup.
 - iOS Safari may evict website data after a long period without use unless the app is added to the Home Screen. Keep backups.
 - The offline badge relies on `navigator.onLine`, which some networks report imprecisely.

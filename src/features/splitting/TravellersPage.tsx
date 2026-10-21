@@ -7,6 +7,8 @@ import { IconArrowRight, IconPlus } from '../../components/Icons'
 import { useBusy } from '../../components/useBusy'
 import type { Traveller } from '../../types/domain'
 import { settlementFor } from './settlement'
+import { SharingCard } from '../sharing/SharingCard'
+import { useAuth } from '../../sync/cloud'
 
 export function TravellersPage({ tripId }: { tripId: string }) {
   return <TripGuard tripId={tripId}>{(data) => <Travellers data={data} />}</TripGuard>
@@ -16,6 +18,8 @@ function Travellers({ data }: { data: TripData }) {
   const { trip, travellers } = data
   const cur = trip.baseCurrency
   const { names, balances, transfers } = settlementFor(data)
+  const auth = useAuth()
+  const myUserId = auth.status === 'signedIn' ? auth.userId : null
   const [newName, setNewName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, run] = useBusy()
@@ -36,11 +40,13 @@ function Travellers({ data }: { data: TripData }) {
     <div className="space-y-4">
       <PageHeader title="Travellers & split" subtitle={trip.name} />
 
+      <SharingCard data={data} />
+
       <Card>
         <SectionTitle>Travellers</SectionTitle>
         <ul className="divide-y divide-slate-100">
           {travellers.map((t) => (
-            <TravellerRow key={t.id} traveller={t} others={travellers.filter((o) => o.id !== t.id)} canRemove={travellers.length > 1} />
+            <TravellerRow key={t.id} traveller={t} isYou={!!myUserId && t.userId === myUserId} others={travellers.filter((o) => o.id !== t.id)} canRemove={travellers.length > 1} />
           ))}
         </ul>
         <form onSubmit={add} className="mt-3 flex gap-2" noValidate>
@@ -110,7 +116,17 @@ function Travellers({ data }: { data: TripData }) {
   )
 }
 
-function TravellerRow({ traveller, others, canRemove }: { traveller: Traveller; others: Traveller[]; canRemove: boolean }) {
+function TravellerRow({
+  traveller,
+  others,
+  canRemove,
+  isYou,
+}: {
+  traveller: Traveller
+  others: Traveller[]
+  canRemove: boolean
+  isYou: boolean
+}) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(traveller.displayName)
   const [error, setError] = useState<string | null>(null)
@@ -147,7 +163,10 @@ function TravellerRow({ traveller, others, canRemove }: { traveller: Traveller; 
         </form>
       ) : (
         <div className="flex items-center gap-2">
-          <span className="flex-1 truncate">{traveller.displayName}</span>
+          <span className="flex-1 truncate">
+            {traveller.displayName}
+            {isYou ? <span className="text-slate-500"> (you)</span> : null}
+          </span>
           <Button variant="ghost" onClick={() => setEditing(true)}>Rename</Button>
           {canRemove ? <Button variant="ghost" className="text-red-700 hover:bg-red-50" onClick={() => void askRemove()}>Remove</Button> : null}
         </div>

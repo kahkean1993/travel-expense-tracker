@@ -1,5 +1,8 @@
 import { useEffect, type ComponentType } from 'react'
-import { href, paths, useRoute, type Route } from './router'
+import { JoinPage } from '../features/sharing/JoinPage'
+import { SyncIndicator } from '../components/SyncIndicator'
+import { pendingInvite, useAuth } from '../sync/cloud'
+import { href, navigate, paths, useRoute, type Route } from './router'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { tripsRepo } from '../db/repositories'
 import { IconChart, IconList, IconPlus, IconReport, IconSettings, IconSuitcase, IconUsers } from '../components/Icons'
@@ -50,6 +53,7 @@ function activeNav(route: Route): NavKey | null {
     case 'report':
       return 'report'
     case 'settings':
+    case 'join':
       return 'settings'
     default:
       return null
@@ -67,6 +71,13 @@ export function App() {
   const route = useRoute()
   const currentTripId = routeTripId(route)
   const lastTripId = currentTripId ?? readLastTrip()
+  const auth = useAuth()
+
+  // After signing in from an invite link, continue joining that trip.
+  useEffect(() => {
+    const token = auth.status === 'signedIn' ? pendingInvite() : null
+    if (token && route.name !== 'join') navigate(paths.join(token))
+  }, [auth.status, route.name])
 
   useEffect(() => {
     if (!currentTripId) return
@@ -135,7 +146,9 @@ export function App() {
             </a>
           ))}
         </nav>
-        <p className="mt-auto px-5 py-4 text-xs text-slate-500">Data is stored only in this browser on this device.</p>
+        <p className="mt-auto px-5 py-4 text-xs text-slate-500">
+          {auth.status === 'disabled' ? 'Data is stored only in this browser on this device.' : 'Trips you don’t share stay on this device only.'}
+        </p>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -150,6 +163,7 @@ export function App() {
             <span className="hidden md:block" />
             <div className="flex items-center gap-2">
               <OnlineIndicator />
+              <SyncIndicator />
               <SaveIndicator />
             </div>
           </div>
@@ -227,6 +241,8 @@ function Screen({ route }: { route: Route }) {
       return <ReportPage tripId={route.tripId} />
     case 'settings':
       return <SettingsPage />
+    case 'join':
+      return <JoinPage token={route.token} />
     case 'notFound':
       return (
         <EmptyState title="Page not found" action={<LinkButton to={paths.trips()} variant="primary">Go to trips</LinkButton>}>

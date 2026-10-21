@@ -4,6 +4,7 @@ import { EmptyState, LinkButton, Loading, Money, PageHeader } from '../../compon
 import { formatDateRange } from '../../lib/dates'
 import { IconChevronRight, IconPlus } from '../../components/Icons'
 import { percentUsed } from '../../lib/money/money'
+import { cloudConfigured } from '../../sync/cloud'
 import type { Trip } from '../../types/domain'
 
 export function TripsPage() {
@@ -18,7 +19,7 @@ export function TripsPage() {
     <div>
       <PageHeader
         title="Trips"
-        subtitle="Saved in this browser on this device only."
+        subtitle={cloudConfigured ? 'Trips are on this device unless you share them.' : 'Saved in this browser on this device only.'}
         actions={
           rows.length ? (
             <LinkButton to={paths.tripNew()} variant="primary">
@@ -69,6 +70,7 @@ function TripList({ title, rows, empty }: { title: string; rows: { trip: Trip; s
                     <p className="truncate font-medium text-slate-900">
                       {trip.name}
                       {trip.isSample ? <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs font-normal text-slate-600">Sample</span> : null}
+                      {trip.syncMode === 'cloud' ? <span className="ml-2 rounded bg-accent-50 px-1.5 py-0.5 text-xs font-normal text-accent-800">Shared</span> : null}
                     </p>
                     <p className="truncate text-sm text-slate-600">
                       {[trip.destination, formatDateRange(trip.startDate, trip.endDate)].filter(Boolean).join(' · ')}
