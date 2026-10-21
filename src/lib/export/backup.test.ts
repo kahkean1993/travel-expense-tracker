@@ -72,6 +72,22 @@ describe('backup and restore', () => {
     expect(await db.trips.get(b.trip.id)).toBeTruthy()
   })
 
+  it('merge reuses an existing category with the same name instead of duplicating it', async () => {
+    const gifts = await categoriesRepo.add('Gifts')
+    const a = await makeTrip(['Me'], { name: 'A' })
+    await addExpense(a.trip, a.travellers, { amount: '5', splitMode: 'personal', categoryId: gifts.id })
+    const backupText = JSON.stringify(await createBackup())
+    await db.delete()
+    await db.open()
+    const localGifts = await categoriesRepo.add('gifts')
+    const parsed = parseBackup(backupText)
+    if (!parsed.ok) throw new Error(parsed.error)
+    await importMerge(parsed.backup)
+    const cats = (await db.categories.toArray()).filter((c) => c.name.toLowerCase() === 'gifts')
+    expect(cats).toHaveLength(1)
+    expect((await db.expenses.toArray())[0]?.categoryId).toBe(localGifts.id)
+  })
+
   it('rejects invalid files with a helpful message and leaves data untouched', async () => {
     const { trip, travellers } = await makeTrip()
     await addExpense(trip, travellers, { amount: '5' })
@@ -97,7 +113,7 @@ describe('backup and restore', () => {
     expect(parseBackup(JSON.stringify(badRate)).ok).toBe(false)
 
     const badCurrency = structuredClone(good)
-    badCurrency.data.trips[0]!.baseCurrency = 'ZZZ'
+    badCurrency.data.trips[0]!.baseCurrency = 'RM'
     expect(parseBackup(JSON.stringify(badCurrency))).toEqual({ ok: false, error: expect.stringMatching(/currency code/) })
 
     const orphan = structuredClone(good)

@@ -34,7 +34,7 @@ import {
   type Traveller,
   type Trip,
 } from '../../types/domain'
-import { convertMinorUnits, isValidCurrencyCode, MAX_MINOR_UNITS, parseExchangeRate } from '../money/money'
+import { convertMinorUnits, isWellFormedCurrencyCode, MAX_MINOR_UNITS, parseExchangeRate } from '../money/money'
 
 export const BACKUP_FORMAT = 'travel-expense-tracker-backup'
 export const BACKUP_FORMAT_VERSION = 1
@@ -106,7 +106,7 @@ function minor(o: Obj, key: string, where: string): number {
 }
 function currency(o: Obj, key: string, where: string): string {
   const v = str(o, key, where)
-  check(isValidCurrencyCode(v), `${where}: "${v}" is not a valid currency code.`)
+  check(isWellFormedCurrencyCode(v), `${where}: "${v}" is not a valid currency code.`)
   return v
 }
 function arr(o: Obj, key: string): unknown[] {
@@ -229,7 +229,7 @@ function validateSettings(v: unknown): AppSettings | null {
   return {
     ...base,
     defaultBaseCurrency:
-      typeof v.defaultBaseCurrency === 'string' && isValidCurrencyCode(v.defaultBaseCurrency)
+      typeof v.defaultBaseCurrency === 'string' && isWellFormedCurrencyCode(v.defaultBaseCurrency)
         ? v.defaultBaseCurrency
         : base.defaultBaseCurrency,
   }
@@ -369,12 +369,20 @@ export function importMerge(backup: BackupFile): Promise<{ addedTrips: number; s
         (await db.expenses.bulkGet(expenses.map((e) => e.id))).some(Boolean) ||
         (await db.expenseShares.bulkGet(shares.map((s) => s.id))).some(Boolean)
       if (clash) throw new Error('Some records in this backup clash with existing data. Use "Replace all data" instead.')
-      await db.categories.bulkAdd(
-        data.categories.filter((c) => !existingCats.has(c.id) && (c.tripId === null || ids.has(c.tripId))),
-      )
+      // A backup category with the same name as a local one is merged into it.
+      const localByName = new Map((await db.categories.toArray()).map((c) => [c.name.toLowerCase(), c.id]))
+      const categoryIdMap = new Map<string, string>()
+      const newCategories = []
+      for (const c of data.categories) {
+        if (existingCats.has(c.id) || (c.tripId !== null && !ids.has(c.tripId))) continue
+        const sameName = localByName.get(c.name.toLowerCase())
+        if (sameName) categoryIdMap.set(c.id, sameName)
+        else newCategories.push(c)
+      }
+      await db.categories.bulkAdd(newCategories)
       await db.trips.bulkAdd(newTrips)
       await db.travellers.bulkAdd(travellers)
-      await db.expenses.bulkAdd(expenses)
+      await db.expenses.bulkAdd(expenses.map((e) => ({ ...e, categoryId: categoryIdMap.get(e.categoryId) ?? e.categoryId })))
       await db.expenseShares.bulkAdd(shares)
       const settings = (await db.settings.get('app')) ?? defaultSettings()
       await db.settings.put({ ...settings, changesSinceBackup: settings.changesSinceBackup + 1 })

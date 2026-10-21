@@ -226,6 +226,7 @@ export function ConfirmDialog({
   onCancel: () => void
 }) {
   const ref = useRef<HTMLDialogElement>(null)
+  const titleId = useId()
   useEffect(() => {
     const d = ref.current
     if (!d) return
@@ -240,10 +241,10 @@ export function ConfirmDialog({
         if (!busy) onCancel()
       }}
       className="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-slate-200 bg-white p-0 text-slate-900 shadow-xl"
-      aria-labelledby="confirm-title"
+      aria-labelledby={titleId}
     >
       <div className="p-5">
-        <h2 id="confirm-title" className="text-lg font-semibold">
+        <h2 id={titleId} className="text-lg font-semibold">
           {title}
         </h2>
         <div className="mt-2 text-sm text-slate-700">{children}</div>
