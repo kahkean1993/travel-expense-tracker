@@ -8,7 +8,7 @@ import { TripLockedNotice } from './TripLockedNotice'
 import { PendingReceipts } from './Receipts'
 import { receiptsRepo } from '../../db/repositories'
 import { ItemisedSheet, type ItemisedApply } from './ItemisedSheet'
-import { repeatPlan, type RepeatMode } from './repeat'
+import { repeatDescription, repeatPlan, type RepeatMode } from './repeat'
 import { toBaseAmounts } from '../splitting/itemised'
 import { Button, ChipGroup, EmptyState, Field, FieldError, LinkButton, Loading, Money, Notice, PageHeader, TextInput } from '../../components/ui'
 import { cardClass, inputClass } from '../../components/styles'
@@ -18,7 +18,8 @@ import { CurrencySelect } from '../../components/CurrencySelect'
 import { useBusy } from '../../components/useBusy'
 import { useAuth } from '../../sync/cloud'
 import { convertMinorUnits, currencySymbol, minorToInputString, parseExchangeRate } from '../../lib/money/money'
-import { fetchLiveRate } from '../../lib/rates'
+import { RateLookupButton } from '../../components/RateLookup'
+import { useRateLookup } from '../../components/useRateLookup'
 import { localDateString } from '../../lib/export/csv'
 import { PAYMENT_METHODS, PAYMENT_METHOD_LABELS, type Expense, type ExpenseShare, type PaymentMethod } from '../../types/domain'
 import { evaluateExpenseForm, formFromExpense, type ExpenseFormValues } from './expenseDraft'
@@ -97,6 +98,8 @@ function ExpenseForm({
     })
   })
   const [photos, setPhotos] = useState<Blob[]>([])
+  /** Set when the expense was saved but its photos could not be attached, so saving again can't duplicate it. */
+  const [savedWithoutPhotos, setSavedWithoutPhotos] = useState<string | null>(null)
   const [repeatDays, setRepeatDays] = useState('')
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('split')
   const [itemised, setItemised] = useState(false)
@@ -118,22 +121,15 @@ function ExpenseForm({
   const names = new Map(travellers.map((t) => [t.id, t.displayName]))
   const sym = currencySymbol(trip.baseCurrency)
 
-  const [rateNote, setRateNote] = useState<{ ok: boolean; text: string } | null>(null)
-  const [rateBusy, runRate] = useBusy()
+  const rateLookup = useRateLookup()
   function useLive() {
-    void runRate(async () => {
-      const found = await fetchLiveRate(values.currency, trip.baseCurrency)
-      if (found.ok) {
-        set('rate', found.value.rate)
-        setRateNote({ ok: true, text: `Rate from ${found.value.date || 'today'} (market rate, your card may differ).` })
-      } else {
-        setRateNote({ ok: false, text: found.error })
-      }
+    void rateLookup.lookUp(values.currency, trip.baseCurrency).then((found) => {
+      if (found) set('rate', found.rate)
     })
   }
 
   function changeCurrency(code: string) {
-    setRateNote(null)
+    rateLookup.clearNote()
     setValues((v) => {
       if (code === trip.baseCurrency) return { ...v, currency: code, rate: '1' }
       const remembered = lastRateFor(expenses, code)
@@ -198,7 +194,18 @@ function ExpenseForm({
     })
   }
 
+  /** Attaches the picked photos. Returns false when any failed (the expense itself is already saved). */
+  async function attachPhotos(expenseId: string) {
+    try {
+      for (const p of photos) await receiptsRepo.add(expenseId, p)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   function save(addAnother: boolean) {
+    if (savedWithoutPhotos) return
     setSubmitted(true)
     setSaveError(null)
     const result = evaluation.result
@@ -215,7 +222,7 @@ function ExpenseForm({
       const items: { record: ExpenseRecord; shares: ShareRecord[] }[] = []
       for (const [i, day] of plan.entries()) {
         const ev = evaluateExpenseForm(
-          { ...values, amount: minorToInputString(day.amount, values.currency.trim().toUpperCase()), date: day.date, description: `${values.description.trim()} (day ${i + 1} of ${days})` },
+          { ...values, amount: minorToInputString(day.amount, values.currency.trim().toUpperCase()), date: day.date, description: repeatDescription(values.description, i + 1, days) },
           trip,
           travellers,
         )
@@ -225,9 +232,10 @@ function ExpenseForm({
       void run(async () => {
         try {
           const saved = await expensesRepo.saveMany(items)
-          for (const p of photos) await receiptsRepo.add(saved[0]!.id, p)
+          const photosOk = await attachPhotos(saved[0]!.id)
           markJustSaved(saved[0]!.id)
           saveLastEntry(trip.id, lastEntryFromForm(values))
+          if (!photosOk) return setSavedWithoutPhotos(saved[0]!.id)
           navigate(paths.expenses(trip.id), { replace: true })
         } catch (err) {
           setSaveError(err instanceof Error ? err.message : 'Could not save these expenses.')
@@ -238,9 +246,10 @@ function ExpenseForm({
     void run(async () => {
       try {
         const saved = await expensesRepo.save(mode === 'edit' ? source!.id : undefined, result.record, result.shares)
-        if (mode !== 'edit') for (const p of photos) await receiptsRepo.add(saved.id, p)
+        const photosOk = mode === 'edit' ? true : await attachPhotos(saved.id)
         markJustSaved(saved.id)
         saveLastEntry(trip.id, lastEntryFromForm(values))
+        if (!photosOk) return setSavedWithoutPhotos(saved.id)
         if (addAnother) {
           setPhotos([])
           setValues((v) => ({ ...v, amount: '', description: '', notes: '', customAmounts: {} }))
@@ -273,6 +282,13 @@ function ExpenseForm({
   return (
     <div className="mx-auto max-w-xl">
       <PageHeader title={title} subtitle={trip.name} back={cancelTo} />
+      {savedWithoutPhotos ? (
+        <div className="mb-3">
+          <Notice tone="warning" action={<LinkButton to={paths.expenseView(trip.id, savedWithoutPhotos)}>Open expense</LinkButton>}>
+            The expense was saved, but its photos could not be added. Open it to try adding them again.
+          </Notice>
+        </div>
+      ) : null}
       {addedCount > 0 ? (
         <div className="mb-3">
           <Notice tone="success">
@@ -341,14 +357,7 @@ function ExpenseForm({
                   aria-invalid={!!errors.rate}
                 />
               </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <Button className="min-h-9 px-3" disabled={rateBusy} onClick={useLive}>
-                  {rateBusy ? 'Looking up…' : "Use today's rate"}
-                </Button>
-                {rateNote ? (
-                  <span role="status" className={`text-xs ${rateNote.ok ? 'text-slate-600' : 'text-amber-800'}`}>{rateNote.text}</span>
-                ) : null}
-              </div>
+              <RateLookupButton lookup={rateLookup} onClick={useLive} />
               {errors.rate ? (
                 <div className="mt-1.5">
                   <FieldError>{errors.rate}</FieldError>

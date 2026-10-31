@@ -5,6 +5,7 @@ import { computeBalances } from '../features/splitting/allocate'
 import { FakeServer } from '../test/fakeServer'
 import { tripInput } from '../test/fixtures'
 import { SyncEngine } from './engine'
+import { RemoteError } from './remote'
 import { tripToRemote } from './mapping'
 
 const opened: TravelDb[] = []
@@ -500,5 +501,41 @@ describe('receipt photos over sync', () => {
     await solo.receiptsRepo.add(e.id, photo())
     expect(await solo.db.outbox.count()).toBe(0)
     expect(server.files.size).toBe(0)
+  })
+})
+
+describe('older databases and refused photos', () => {
+  it('removes the uploaded file when the server refuses the receipt row', async () => {
+    const { alice, bob, server, tripId } = await sharedTrip()
+    const [expense] = await alice.expensesRepo.listByTrip(tripId)
+    const photo = (t: string) => new Blob([t], { type: 'image/jpeg' })
+    for (let i = 0; i < 3; i++) await alice.receiptsRepo.add(expense!.id, photo(`a${i}`))
+    await alice.engine.sync()
+    // Bob has not pulled yet, so his phone thinks the expense has no photos.
+    const late = await bob.receiptsRepo.add(expense!.id, photo('late'))
+    await bob.engine.push()
+    expect(server.files.has(`${tripId}/${late.id}`)).toBe(false)
+    expect(server.files.size).toBe(3)
+    expect((await bob.db.outbox.filter((e) => !!e.error).toArray()).map((e) => e.table)).toEqual(['receipts'])
+  })
+
+  it('still saves a payment made in another currency when the database has no columns for it', async () => {
+    const { bob, server, tripId, aliceT, bobT } = await sharedTrip()
+    const remote = bob.engine.remote as unknown as { upsert: (t: string, rows: Record<string, unknown>[]) => Promise<void> }
+    const real = remote.upsert.bind(remote)
+    remote.upsert = async (table, rows) => {
+      if (table === 'settlements' && rows.some((r) => 'original_currency' in r)) {
+        throw new RemoteError('rejected', "Could not find the 'original_currency' column of 'settlements' in the schema cache")
+      }
+      return real(table, rows)
+    }
+    const p = await bob.settlementsRepo.add(tripId, {
+      fromTravellerId: bobT.id, toTravellerId: aliceT.id, amountMinorUnits: 3000, paidOn: '2026-03-05',
+      originalAmountMinorUnits: 100000, originalCurrency: 'JPY', exchangeRate: '0.03',
+    })
+    await bob.engine.sync()
+    expect(server.settlements.get(p.id)).toMatchObject({ amount_minor: 3000 })
+    expect(server.settlements.get(p.id)).not.toHaveProperty('original_currency')
+    expect(await bob.db.outbox.count()).toBe(0)
   })
 })

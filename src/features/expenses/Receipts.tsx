@@ -26,10 +26,11 @@ function useObjectUrl(blob: Blob | null | undefined) {
 function useReceiptBlob(receipt: Receipt) {
   const [downloaded, setDownloaded] = useState<Blob | null>(null)
   const [failed, setFailed] = useState(false)
+  const { id, tripId, blob: local } = receipt
   useEffect(() => {
-    if (receipt.blob || !syncEngine) return
+    if (local || !syncEngine) return
     let live = true
-    void syncEngine.receiptBlob(receipt).then((b) => {
+    void syncEngine.receiptBlob({ id, tripId }).then((b) => {
       if (!live) return
       if (b) setDownloaded(b)
       else setFailed(true)
@@ -37,7 +38,7 @@ function useReceiptBlob(receipt: Receipt) {
     return () => {
       live = false
     }
-  }, [receipt])
+  }, [id, tripId, local])
   return { blob: receipt.blob ?? downloaded, failed: failed && !receipt.blob }
 }
 
@@ -181,7 +182,7 @@ export function PendingReceipts({ photos, onChange }: { photos: Blob[]; onChange
                 type="button"
                 aria-label={`Remove photo ${i + 1}`}
                 onClick={() => onChange(photos.filter((_, j) => j !== i))}
-                className="press absolute -top-2 -right-2 inline-flex size-7 items-center justify-center rounded-full bg-slate-800 text-white"
+                className="press absolute -top-2 -right-2 inline-flex size-7 items-center justify-center rounded-full bg-black/70 text-white"
               >
                 <IconX width={14} height={14} />
               </button>

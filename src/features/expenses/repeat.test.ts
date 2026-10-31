@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addDaysIso, repeatPlan } from './repeat'
+import { addDaysIso, repeatDescription, repeatPlan } from './repeat'
 
 describe('repeatPlan', () => {
   it('splits a total across days, leftover units to the first days', () => {
@@ -20,5 +20,14 @@ describe('repeatPlan', () => {
   })
   it('rejects zero days', () => {
     expect(() => repeatPlan('2026-03-01', 100, 0, 'split')).toThrow()
+  })
+})
+
+describe('repeatDescription', () => {
+  it('adds the day and keeps long descriptions within the limit', () => {
+    expect(repeatDescription(' Hotel ', 2, 3)).toBe('Hotel (day 2 of 3)')
+    const long = repeatDescription('x'.repeat(200), 1, 12)
+    expect(long.length).toBeLessThanOrEqual(200)
+    expect(long.endsWith(' (day 1 of 12)')).toBe(true)
   })
 })

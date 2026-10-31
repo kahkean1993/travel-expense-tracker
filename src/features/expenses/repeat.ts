@@ -20,3 +20,9 @@ export function repeatPlan(startDate: ISODate, totalMinor: number, days: number,
   const leftover = mode === 'each' ? 0 : totalMinor - base * days
   return Array.from({ length: days }, (_, i) => ({ date: addDaysIso(startDate, i), amount: base + (i < leftover ? 1 : 0) }))
 }
+
+/** "Hotel (day 2 of 3)", shortened so the whole text stays within the 200-character limit. */
+export function repeatDescription(description: string, day: number, days: number, max = 200): string {
+  const suffix = ` (day ${day} of ${days})`
+  return description.trim().slice(0, max - suffix.length).trimEnd() + suffix
+}
