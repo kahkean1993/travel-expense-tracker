@@ -72,6 +72,7 @@ export class SyncEngine {
   private running: Promise<void> | null = null
   private rerun = false
   readonly repos: Repositories
+  private downloads = new Map<string, Promise<Blob | null>>()
 
   constructor(
     private db: TravelDb,
@@ -216,12 +217,31 @@ export class SyncEngine {
         if (r.blob) await this.remote.uploadReceipt(r.tripId, r.id, r.blob)
         rows.push(receiptToRemote(r))
       }
-      if (rows.length) await this.remote.upsert('receipts', rows)
+      try {
+        if (rows.length) await this.remote.upsert('receipts', rows)
+      } catch (error) {
+        // The row was refused (for example a fourth photo): don't leave its file behind in storage.
+        if (error instanceof RemoteError && error.kind === 'rejected') {
+          await this.remote.removeReceiptFiles(rows.map((r) => ({ tripId: r.trip_id, receiptId: r.id }))).catch(() => undefined)
+        }
+        throw error
+      }
       return batch
     }
     if (table === 'settlements') {
       const rows = (await this.db.settlements.bulkGet(ids)).filter((s) => !!s).map(settlementToRemote)
-      if (rows.length) await this.remote.upsert('settlements', rows)
+      try {
+        if (rows.length) await this.remote.upsert('settlements', rows)
+      } catch (error) {
+        // A database that hasn't run the latest migration has no columns for payments in another currency.
+        // Keep the payment itself (in the trip currency) and only drop the "paid in yen" detail.
+        const unsupported = /original_amount_minor|original_currency|exchange_rate/.test(error instanceof Error ? error.message : '')
+        if (!(error instanceof RemoteError) || error.kind !== 'rejected' || !unsupported) throw error
+        await this.remote.upsert(
+          'settlements',
+          rows.map(({ original_amount_minor: _a, original_currency: _c, exchange_rate: _r, ...plain }) => plain),
+        )
+      }
       return batch
     }
     const expenses = (await this.db.expenses.bulkGet(ids)).filter((e) => !!e)
@@ -356,13 +376,23 @@ export class SyncEngine {
     const local = await this.db.receipts.get(receipt.id)
     if (local?.blob) return local.blob
     if (!this.remote.currentUserId()) return null
-    try {
-      const blob = await this.remote.downloadReceipt(receipt.tripId, receipt.id)
-      await this.repos.receiptsRepo.cacheBlob(receipt.id, blob)
-      return blob
-    } catch {
-      return null
+    // Several screens can ask for the same photo at once; download it only once.
+    let pending = this.downloads.get(receipt.id)
+    if (!pending) {
+      pending = (async () => {
+        try {
+          const blob = await this.remote.downloadReceipt(receipt.tripId, receipt.id)
+          await this.repos.receiptsRepo.cacheBlob(receipt.id, blob)
+          return blob
+        } catch {
+          return null
+        } finally {
+          this.downloads.delete(receipt.id)
+        }
+      })()
+      this.downloads.set(receipt.id, pending)
     }
+    return pending
   }
 
   // ---------- Sharing ----------

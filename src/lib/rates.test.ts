@@ -22,6 +22,11 @@ describe('fetchLiveRate', () => {
     const offline = (async () => { throw new TypeError('Failed to fetch') }) as unknown as typeof fetch
     expect((await fetchLiveRate('JPY', 'MYR', offline)).ok).toBe(false)
   })
+  it('rejects malformed currency codes without a request', async () => {
+    const never = (() => { throw new Error('no request') }) as unknown as typeof fetch
+    expect((await fetchLiveRate('A.B', 'MYR', never)).ok).toBe(false)
+    expect((await fetchLiveRate('JPY', '(((', never)).ok).toBe(false)
+  })
   it('returns 1 for the same currency without a request', async () => {
     expect((await fetchLiveRate('MYR', 'MYR', (() => { throw new Error('no') }) as unknown as typeof fetch))).toEqual({ ok: true, value: { rate: '1', date: '' } })
   })

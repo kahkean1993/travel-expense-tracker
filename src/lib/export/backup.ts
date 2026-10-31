@@ -408,6 +408,7 @@ const allTables = () => [
   db.expenses,
   db.expenseShares,
   db.settlements,
+  db.receipts,
   db.categories,
   db.settings,
   db.outbox,
@@ -446,7 +447,14 @@ export function importMerge(backup: BackupFile): Promise<{ addedTrips: number; s
         else newCategories.push(c)
       }
       await db.categories.bulkAdd(newCategories)
-      await db.trips.bulkAdd(newTrips)
+      await db.trips.bulkAdd(
+        newTrips.map((t) => {
+          if (!t.categoryBudgets) return t
+          // Budgets follow their category when it was merged into a local one with the same name.
+          const budgets = Object.fromEntries(Object.entries(t.categoryBudgets).map(([id, v]) => [categoryIdMap.get(id) ?? id, v]))
+          return { ...t, categoryBudgets: budgets }
+        }),
+      )
       await db.travellers.bulkAdd(travellers)
       await db.expenses.bulkAdd(expenses.map((e) => ({ ...e, categoryId: categoryIdMap.get(e.categoryId) ?? e.categoryId })))
       await db.expenseShares.bulkAdd(shares)

@@ -9,7 +9,8 @@ import { useBusy } from '../../components/useBusy'
 import { formatDate } from '../../lib/dates'
 import { localDateString } from '../../lib/export/csv'
 import { convertMinorUnits, currencyFractionDigits, formatMoney, minorToInputString, parseAmountToMinor, parseExchangeRate } from '../../lib/money/money'
-import { fetchLiveRate } from '../../lib/rates'
+import { RateLookupButton } from '../../components/RateLookup'
+import { useRateLookup } from '../../components/useRateLookup'
 import { CurrencySelect } from '../../components/CurrencySelect'
 import type { Settlement } from '../../types/domain'
 import type { Transfer } from './allocate'
@@ -171,7 +172,6 @@ function Bars({ paid, share, biggest }: { paid: number; share: number; biggest: 
       <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
         <div className="h-full origin-left animate-grow-x rounded-full bg-amber-400" style={{ width: `${(share / biggest) * 100}%` }} />
       </div>
-      <p className="sr-only">Paid {paid}, share {share}</p>
     </div>
   )
 }
@@ -201,7 +201,7 @@ function MarkPaidForm({ data, transfer, onDone }: { data: TripData; transfer: Tr
   const [amount, setAmount] = useState(minorToInputString(transfer.amount, cur))
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [rateNote, setRateNote] = useState<string | null>(null)
+  const rateLookup = useRateLookup()
   const [busy, run] = useBusy()
   const foreign = currency !== cur
 
@@ -228,7 +228,7 @@ function MarkPaidForm({ data, transfer, onDone }: { data: TripData; transfer: Tr
 
   function changeCurrency(code: string) {
     setCurrency(code)
-    setRateNote(null)
+    rateLookup.clearNote()
     setError(null)
     if (code === cur) {
       setRate('1')
@@ -240,14 +240,12 @@ function MarkPaidForm({ data, transfer, onDone }: { data: TripData; transfer: Tr
   }
 
   async function lookUp() {
-    const found = await fetchLiveRate(currency, cur)
-    if (!found.ok) return setRateNote(found.error)
-    setRate(found.value.rate)
-    setRateNote(`Rate from ${found.value.date || 'today'} (market rate).`)
+    const found = await rateLookup.lookUp(currency, cur)
+    if (!found) return
+    setRate(found.rate)
     // Suggest paying the full amount in this currency; only a suggestion, the saved conversion is exact.
     const owedMajor = transfer.amount / 10 ** currencyFractionDigits(cur)
-    const suggestion = owedMajor / Number(found.value.rate)
-    setAmount(suggestion.toFixed(currencyFractionDigits(currency)))
+    setAmount((owedMajor / Number(found.rate)).toFixed(currencyFractionDigits(currency)))
   }
 
   function submit(e: React.FormEvent) {
@@ -294,11 +292,10 @@ function MarkPaidForm({ data, transfer, onDone }: { data: TripData; transfer: Tr
       {foreign ? (
         <div className="rounded-xl bg-slate-50 p-3">
           <label htmlFor="paid-rate" className="text-sm font-medium text-slate-700">Exchange rate (1 {currency} = {cur})</label>
-          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          <div className="mt-1.5">
             <TextInput id="paid-rate" className="w-36" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="e.g. 0.0312" />
-            <Button className="min-h-9 px-3" onClick={() => void lookUp()}>Use today's rate</Button>
           </div>
-          {rateNote ? <p role="status" className="mt-1.5 text-xs text-slate-600">{rateNote}</p> : null}
+          <RateLookupButton lookup={rateLookup} onClick={() => void lookUp()} />
           {base !== null ? <p className="mt-2 text-sm text-slate-700">Counts as <span className="font-semibold">{formatMoney(base, cur)}</span> towards what is owed.</p> : null}
         </div>
       ) : null}

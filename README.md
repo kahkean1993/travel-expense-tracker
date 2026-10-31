@@ -204,7 +204,7 @@ The schema lives in `src/db/schema.ts` (`DB_SCHEMA_VERSION = 2`; version 2 added
 
 ## Testing
 
-`npm test` runs 178 tests covering:
+`npm test` runs 184 tests covering:
 
 - money: precision, parsing and validation, conversion direction, half-up rounding, tiny amounts, mixed currencies, formatting
 - splitting: equal and weighted remainders, custom amount validation, personal expenses, the payer's own share, balances summing to zero, and randomised settlement checks

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { db } from '../../db/schema'
-import { categoriesRepo, settlementsRepo } from '../../db/repositories'
+import { categoriesRepo, receiptsRepo, settlementsRepo } from '../../db/repositories'
 import { addExpense, makeTrip } from '../../test/fixtures'
 import { createBackup, importMerge, importReplace, parseBackup, previewImport } from './backup'
 
@@ -158,5 +158,32 @@ describe('payments in backups', () => {
     expect(parseBackup(JSON.stringify(file)).ok).toBe(false)
     file.data.settlements[0].toTravellerId = file.data.settlements[0].fromTravellerId
     expect(parseBackup(JSON.stringify(file)).ok).toBe(false)
+  })
+})
+
+describe('receipts and category budgets in restores', () => {
+  it('replace removes receipt photos that belonged to the old data', async () => {
+    const { trip, travellers } = await makeTrip(['Me'])
+    const e = await addExpense(trip, travellers, { amount: '5', splitMode: 'personal' })
+    await receiptsRepo.add(e.id, new Blob(['x'], { type: 'image/jpeg' }))
+    const parsed = parseBackup(JSON.stringify(await createBackup()))
+    if (!parsed.ok) throw new Error(parsed.error)
+    await importReplace(parsed.backup)
+    expect(await db.receipts.count()).toBe(0)
+  })
+
+  it('merge keeps category budgets attached to the category they were set on', async () => {
+    const made = await makeTrip(['Me'], { name: 'Source' })
+    await db.trips.update(made.trip.id, { categoryBudgets: { 'backup-food': 5000, 'cat-transport': 700 } })
+    await db.categories.add({ id: 'backup-food', tripId: null, name: 'Food & Drinks', isCustom: true, createdAt: '2026-01-01T00:00:00.000Z' })
+    const text = JSON.stringify(await createBackup())
+    await db.delete()
+    await db.open()
+    await makeTrip(['Me'], { name: 'Other' })
+    const parsed = parseBackup(text)
+    if (!parsed.ok) throw new Error(parsed.error)
+    await importMerge(parsed.backup)
+    const merged = (await db.trips.toArray()).find((t) => t.name === 'Source')!
+    expect(merged.categoryBudgets).toEqual({ 'cat-food': 5000, 'cat-transport': 700 })
   })
 })

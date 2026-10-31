@@ -15,6 +15,7 @@ export interface LiveRate {
 
 export async function fetchLiveRate(from: string, to: string, fetcher: typeof fetch = fetch): Promise<Result<LiveRate>> {
   if (from === to) return { ok: true, value: { rate: '1', date: '' } }
+  if (!/^[A-Z]{3}$/.test(from) || !/^[A-Z]{3}$/.test(to)) return { ok: false, error: 'Use 3-letter currency codes like JPY. Enter the rate yourself.' }
   let response: Response
   try {
     response = await fetcher(`${ENDPOINT}?base=${encodeURIComponent(from)}&symbols=${encodeURIComponent(to)}`, {
